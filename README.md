@@ -2,7 +2,7 @@
 
 Native macOS dictation tool. Hold a key, speak, release — text appears at your cursor.
 
-**Status:** early development (v0.1 — menu bar skeleton only)
+**Status:** early development (v0.1 — recording + transcription working, no hotkey/paste yet)
 
 ## Stack
 
@@ -36,8 +36,8 @@ open build/Debug/Bark.app
 ## Roadmap
 
 - [x] Phase 0 — menu bar skeleton
-- [ ] Phase 1 — AVAudioEngine recorder + device picker + AirPods hot-swap
-- [ ] Phase 2 — WhisperKit transcription
+- [x] Phase 1 — AVAudioEngine recorder + device picker + AirPods hot-swap
+- [x] Phase 2 — WhisperKit transcription (large-v3-turbo, eager load, warmup)
 - [ ] Phase 3 — Keyboard hook + paste
 - [ ] Phase 4 — Overlay pill + settings UI
 - [ ] Phase 5 — Onboarding, Sparkle, signing pipeline
