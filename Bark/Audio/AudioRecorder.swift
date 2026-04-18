@@ -1,0 +1,181 @@
+import AVFoundation
+import CoreAudio
+import Foundation
+import os
+
+final class AudioRecorder {
+
+    static let targetSampleRate: Double = 16_000
+    private static let preBufferSeconds: Double = 0.5
+
+    private let log = Logger(subsystem: "se.lab37.bark.mac", category: "AudioRecorder")
+    private let engine = AVAudioEngine()
+    private let targetFormat: AVAudioFormat
+    private let lock = NSLock()
+
+    private var preBuffer: [Float] = []
+    private var preBufferCapacity: Int
+    private var recordingBuffer: [Float] = []
+    private var recording = false
+    private var converter: AVAudioConverter?
+    private var hardwareFormat: AVAudioFormat?
+    private var currentDeviceID: AudioDeviceID?
+
+    init() throws {
+        guard let fmt = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Self.targetSampleRate,
+            channels: 1,
+            interleaved: false
+        ) else {
+            throw NSError(domain: "AudioRecorder", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to build target audio format"])
+        }
+        targetFormat = fmt
+        preBufferCapacity = Int(Self.targetSampleRate * Self.preBufferSeconds)
+    }
+
+    func start(deviceID: AudioDeviceID? = nil) throws {
+        if engine.isRunning { stop() }
+
+        if let deviceID {
+            try setInputDevice(deviceID)
+            currentDeviceID = deviceID
+        }
+
+        let input = engine.inputNode
+        let hwFormat = input.inputFormat(forBus: 0)
+        guard hwFormat.sampleRate > 0 else {
+            throw NSError(domain: "AudioRecorder", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Hardware reported sample rate 0 — device unavailable?"])
+        }
+        hardwareFormat = hwFormat
+        converter = AVAudioConverter(from: hwFormat, to: targetFormat)
+
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: hwFormat) { [weak self] buffer, _ in
+            self?.process(buffer)
+        }
+
+        engine.prepare()
+        try engine.start()
+        log.info("Mic stream started: hw=\(hwFormat.sampleRate, privacy: .public)Hz ch=\(hwFormat.channelCount, privacy: .public) target=\(Int(Self.targetSampleRate), privacy: .public)Hz")
+    }
+
+    func stop() {
+        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning { engine.stop() }
+        converter = nil
+        hardwareFormat = nil
+        lock.lock()
+        preBuffer.removeAll(keepingCapacity: false)
+        recordingBuffer.removeAll(keepingCapacity: false)
+        recording = false
+        lock.unlock()
+        log.info("Mic stream stopped.")
+    }
+
+    func beginRecording() {
+        lock.lock()
+        let carry = preBuffer
+        recordingBuffer = carry
+        preBuffer.removeAll(keepingCapacity: true)
+        recording = true
+        lock.unlock()
+    }
+
+    func endRecording() -> [Float] {
+        lock.lock()
+        let captured = recordingBuffer
+        recordingBuffer.removeAll(keepingCapacity: false)
+        recording = false
+        lock.unlock()
+        return captured
+    }
+
+    // MARK: - Internal
+
+    private func process(_ buffer: AVAudioPCMBuffer) {
+        guard let converter, let out = convert(buffer, using: converter) else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        if recording {
+            recordingBuffer.append(contentsOf: out)
+        } else {
+            preBuffer.append(contentsOf: out)
+            if preBuffer.count > preBufferCapacity {
+                preBuffer.removeFirst(preBuffer.count - preBufferCapacity)
+            }
+        }
+    }
+
+    private func convert(_ input: AVAudioPCMBuffer, using converter: AVAudioConverter) -> [Float]? {
+        let ratio = targetFormat.sampleRate / input.format.sampleRate
+        let outCapacity = AVAudioFrameCount(Double(input.frameLength) * ratio) + 256
+        guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else {
+            return nil
+        }
+
+        var error: NSError?
+        var supplied = false
+        let status = converter.convert(to: out, error: &error) { _, outStatus in
+            if supplied {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            outStatus.pointee = .haveData
+            return input
+        }
+
+        if status == .error || error != nil {
+            log.error("Converter error: \(error?.localizedDescription ?? "unknown", privacy: .public)")
+            return nil
+        }
+
+        let frames = Int(out.frameLength)
+        guard frames > 0, let channel = out.floatChannelData?[0] else { return [] }
+        return Array(UnsafeBufferPointer(start: channel, count: frames))
+    }
+
+    private func setInputDevice(_ deviceID: AudioDeviceID) throws {
+        guard let audioUnit = engine.inputNode.audioUnit else {
+            throw NSError(domain: "AudioRecorder", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "inputNode has no audioUnit"])
+        }
+        var id = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &id,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        if status != noErr {
+            throw NSError(domain: "AudioRecorder", code: Int(status),
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to set input device (\(status))"])
+        }
+    }
+}
+
+// MARK: - WAV writing (test helper)
+
+enum WAVWriter {
+    static func write(samples: [Float], sampleRate: Double, to url: URL) throws {
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false
+        )!
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else {
+            throw NSError(domain: "WAVWriter", code: 1)
+        }
+        buf.frameLength = AVAudioFrameCount(samples.count)
+        let channel = buf.floatChannelData![0]
+        for i in 0..<samples.count { channel[i] = samples[i] }
+        try file.write(from: buf)
+    }
+}
