@@ -1,0 +1,19 @@
+.DS_Store
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+DerivedData/
+build/
+.build/
+Bark.xcodeproj/
+
+# Swift Package Manager
+Package.resolved
+.swiftpm/
+
+# Signing
+*.p12
+*.mobileprovision
+*.provisionprofile
