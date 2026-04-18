@@ -7,6 +7,7 @@ final class MenuBarController: NSObject {
     private let log = Logger(subsystem: "se.lab37.bark.mac", category: "MenuBar")
     private let statusItem: NSStatusItem
     private let recorder: AudioRecorder?
+    private let transcriber = Transcriber()
     private var selectedDeviceID: AudioDeviceID?
 
     override init() {
@@ -15,12 +16,34 @@ final class MenuBarController: NSObject {
         super.init()
         configureButton()
         rebuildMenu()
+        Task.detached { [transcriber, log] in
+            do {
+                let t0 = Date()
+                try await transcriber.load()
+                log.info("Eager load complete in \(Date().timeIntervalSince(t0), privacy: .public)s")
+                await transcriber.warmup()
+            } catch {
+                log.error("Eager load failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     private func configureButton() {
         guard let button = statusItem.button else { return }
-        button.title = "Bark"
         button.toolTip = "Bark — local dictation"
+        if let icon = Self.loadStatusIcon() {
+            button.image = icon
+        } else {
+            button.title = "Bark"
+        }
+    }
+
+    private static func loadStatusIcon() -> NSImage? {
+        guard let url = Bundle.main.url(forResource: "Icon", withExtension: "png"),
+              let image = NSImage(contentsOf: url) else { return nil }
+        image.size = NSSize(width: 20, height: 20)
+        image.isTemplate = false
+        return image
     }
 
     private func rebuildMenu() {
@@ -39,6 +62,12 @@ final class MenuBarController: NSObject {
                               keyEquivalent: "")
         test.target = self
         menu.addItem(test)
+
+        let transcribe = NSMenuItem(title: "Test Record 3s → Transcribe",
+                                    action: #selector(testTranscribe),
+                                    keyEquivalent: "")
+        transcribe.target = self
+        menu.addItem(transcribe)
 
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
@@ -118,6 +147,51 @@ final class MenuBarController: NSObject {
         }
     }
 
+    @objc private func testTranscribe() {
+        guard let recorder else {
+            alert("AudioRecorder unavailable.")
+            return
+        }
+        let deviceID = selectedDeviceID
+        let transcriber = self.transcriber
+
+        let log = self.log
+        Task.detached { [weak self] in
+            let result: String
+            do {
+                try recorder.start(deviceID: deviceID)
+                recorder.beginRecording()
+                try await Task.sleep(nanoseconds: 3 * 1_000_000_000)
+                let samples = recorder.endRecording()
+                recorder.stop()
+                log.info("Captured samples: count=\(samples.count, privacy: .public) durationSec=\(Double(samples.count) / 16000.0, privacy: .public)")
+
+                let t0 = Date()
+                let text = try await withThrowingTaskGroup(of: String.self) { group in
+                    group.addTask { try await transcriber.transcribe(samples: samples) }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                        throw NSError(domain: "Transcriber", code: 2,
+                                      userInfo: [NSLocalizedDescriptionKey: "Transcription timed out after 30s"])
+                    }
+                    guard let first = try await group.next() else { return "" }
+                    group.cancelAll()
+                    return first
+                }
+                log.info("Transcribe elapsed: \(Date().timeIntervalSince(t0), privacy: .public)s")
+                result = text.isEmpty ? "(empty transcription)" : text
+            } catch {
+                result = "Failed: \(error.localizedDescription)"
+            }
+            await MainActor.run { [weak self] in
+                self?.log.info("Transcription result: \(result, privacy: .public)")
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(result, forType: .string)
+                self?.alert("Copied to clipboard:\n\n\(result)")
+            }
+        }
+    }
+
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -128,7 +202,11 @@ final class MenuBarController: NSObject {
         a.messageText = "Bark"
         a.informativeText = message
         a.alertStyle = .informational
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        a.window.level = .floating
+        a.window.orderFrontRegardless()
         a.runModal()
+        NSApp.setActivationPolicy(.accessory)
     }
 }
