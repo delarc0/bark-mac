@@ -17,9 +17,8 @@ final class AudioRecorder {
     private var preBufferCapacity: Int
     private var recordingBuffer: [Float] = []
     private var recording = false
-    private var converter: AVAudioConverter?
-    private var hardwareFormat: AVAudioFormat?
     private var currentDeviceID: AudioDeviceID?
+    private var configChangeObserver: NSObjectProtocol?
 
     init() throws {
         guard let fmt = AVAudioFormat(
@@ -33,40 +32,97 @@ final class AudioRecorder {
         }
         targetFormat = fmt
         preBufferCapacity = Int(Self.targetSampleRate * Self.preBufferSeconds)
+
+        configChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleConfigurationChange()
+        }
+    }
+
+    deinit {
+        if let configChangeObserver {
+            NotificationCenter.default.removeObserver(configChangeObserver)
+        }
     }
 
     func start(deviceID: AudioDeviceID? = nil) throws {
         if engine.isRunning { stop() }
 
-        if let deviceID {
-            try setInputDevice(deviceID)
-            currentDeviceID = deviceID
+        // Always bind explicitly. The inputNode's device is sticky across sessions,
+        // so a nil deviceID (System default, or an unplugged selection) must rebind
+        // to the current default rather than keep the previous device.
+        if let resolved = deviceID ?? AudioDeviceCatalog.defaultInputID(),
+           resolved != currentDeviceID {
+            do {
+                try setInputDevice(resolved)
+                currentDeviceID = resolved
+            } catch {
+                if let fallback = AudioDeviceCatalog.defaultInputID(), fallback != resolved {
+                    try setInputDevice(fallback)
+                    currentDeviceID = fallback
+                    log.warning("Device \(resolved, privacy: .public) unavailable, fell back to default input")
+                } else {
+                    throw error
+                }
+            }
         }
 
+        try installCapture()
+        log.info("Mic stream started: target=\(Int(Self.targetSampleRate), privacy: .public)Hz")
+    }
+
+    private func installCapture() throws {
         let input = engine.inputNode
         let hwFormat = input.inputFormat(forBus: 0)
         guard hwFormat.sampleRate > 0 else {
             throw NSError(domain: "AudioRecorder", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "Hardware reported sample rate 0 — device unavailable?"])
         }
-        hardwareFormat = hwFormat
-        converter = AVAudioConverter(from: hwFormat, to: targetFormat)
+        guard let converter = AVAudioConverter(from: hwFormat, to: targetFormat) else {
+            throw NSError(domain: "AudioRecorder", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to build converter for \(hwFormat.sampleRate)Hz input"])
+        }
 
         input.removeTap(onBus: 0)
+        // The converter is captured by the tap closure rather than stored on self:
+        // the render thread must never read state the main thread mutates.
         input.installTap(onBus: 0, bufferSize: 1024, format: hwFormat) { [weak self] buffer, _ in
-            self?.process(buffer)
+            self?.process(buffer, converter: converter)
         }
 
         engine.prepare()
         try engine.start()
-        log.info("Mic stream started: hw=\(hwFormat.sampleRate, privacy: .public)Hz ch=\(hwFormat.channelCount, privacy: .public) target=\(Int(Self.targetSampleRate), privacy: .public)Hz")
+    }
+
+    private func handleConfigurationChange() {
+        lock.lock()
+        let wasRecording = recording
+        lock.unlock()
+        guard wasRecording else { return }
+
+        log.warning("Audio configuration changed mid-recording — rebuilding capture")
+        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning { engine.stop() }
+        do {
+            try installCapture()
+        } catch {
+            if let fallback = AudioDeviceCatalog.defaultInputID(), fallback != currentDeviceID {
+                try? setInputDevice(fallback)
+                currentDeviceID = fallback
+                try? installCapture()
+            }
+            if !engine.isRunning {
+                log.error("Capture rebuild failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     func stop() {
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning { engine.stop() }
-        converter = nil
-        hardwareFormat = nil
         lock.lock()
         preBuffer.removeAll(keepingCapacity: false)
         recordingBuffer.removeAll(keepingCapacity: false)
@@ -77,26 +133,46 @@ final class AudioRecorder {
 
     func beginRecording() {
         lock.lock()
-        let carry = preBuffer
-        recordingBuffer = carry
+        recordingBuffer = preBuffer
         preBuffer.removeAll(keepingCapacity: true)
         recording = true
         lock.unlock()
     }
 
+    /// Returns all samples not yet consumed by `takeChunk()`. Non-streaming callers
+    /// who never call takeChunk() get the full recording; streaming callers get the tail.
     func endRecording() -> [Float] {
         lock.lock()
-        let captured = recordingBuffer
-        recordingBuffer.removeAll(keepingCapacity: false)
+        let tail = recordingBuffer
+        recordingBuffer = []
         recording = false
         lock.unlock()
-        return captured
+        AudioLevelMonitor.shared.reset()
+        return tail
+    }
+
+    /// Drains and returns all samples accumulated since the previous `takeChunk()`
+    /// call (or `beginRecording()`). Consumed samples are freed immediately.
+    func takeChunk() -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard recording, !recordingBuffer.isEmpty else { return [] }
+        let chunk = recordingBuffer
+        recordingBuffer = []
+        recordingBuffer.reserveCapacity(chunk.count)
+        return chunk
     }
 
     // MARK: - Internal
 
-    private func process(_ buffer: AVAudioPCMBuffer) {
-        guard let converter, let out = convert(buffer, using: converter) else { return }
+    private func process(_ buffer: AVAudioPCMBuffer, converter: AVAudioConverter) {
+        guard let out = convert(buffer, using: converter) else { return }
+        var peak: Float = 0
+        for s in out {
+            let a = abs(s)
+            if a > peak { peak = a }
+        }
+        AudioLevelMonitor.shared.report(peak)
         lock.lock()
         defer { lock.unlock() }
         if recording {

@@ -1,0 +1,170 @@
+import AppKit
+import Carbon.HIToolbox
+import Combine
+import Foundation
+
+@MainActor
+final class AppSettings: ObservableObject {
+    static let shared = AppSettings()
+
+    // Notification posted whenever any stored setting changes (keyCode/flagMask/displayName/model).
+    static let didChange = Notification.Name("se.lab37.bark.mac.AppSettings.didChange")
+
+    private let defaults = UserDefaults.standard
+
+    private enum Key {
+        static let hotkeyKeyCode = "hotkey.keyCode"
+        static let hotkeyFlagMask = "hotkey.flagMask"
+        static let hotkeyDisplayName = "hotkey.displayName"
+        static let modelVariant = "transcriber.model"
+        static let language = "transcriber.language"
+        static let inputDeviceUID = "audio.deviceUID"
+        static let onboardingCompleted = "onboarding.completed"
+        static let soundsEnabled = "sounds.enabled"
+        static let darkModeEnabled = "ui.darkMode"
+        static let overlayEnabled = "ui.overlayEnabled"
+        static let cleanupEnabled = "text.cleanup"
+        static let vocabulary = "text.vocabulary"
+        static let streamingEnabled = "transcription.streaming"
+    }
+
+    @Published var hotkeyKeyCode: CGKeyCode {
+        didSet {
+            defaults.set(Int(hotkeyKeyCode), forKey: Key.hotkeyKeyCode)
+            notify()
+        }
+    }
+
+    @Published var hotkeyFlagMask: UInt64 {
+        didSet {
+            defaults.set(String(hotkeyFlagMask), forKey: Key.hotkeyFlagMask)
+            notify()
+        }
+    }
+
+    @Published var hotkeyDisplayName: String {
+        didSet {
+            defaults.set(hotkeyDisplayName, forKey: Key.hotkeyDisplayName)
+            notify()
+        }
+    }
+
+    @Published var modelVariant: String {
+        didSet {
+            defaults.set(modelVariant, forKey: Key.modelVariant)
+            notify()
+        }
+    }
+
+    @Published var language: String? {
+        didSet {
+            if let language {
+                defaults.set(language, forKey: Key.language)
+            } else {
+                defaults.removeObject(forKey: Key.language)
+            }
+            notify()
+        }
+    }
+
+    @Published var inputDeviceUID: String? {
+        didSet {
+            if let inputDeviceUID {
+                defaults.set(inputDeviceUID, forKey: Key.inputDeviceUID)
+            } else {
+                defaults.removeObject(forKey: Key.inputDeviceUID)
+            }
+            notify()
+        }
+    }
+
+    @Published var onboardingCompleted: Bool {
+        didSet {
+            defaults.set(onboardingCompleted, forKey: Key.onboardingCompleted)
+            notify()
+        }
+    }
+
+    @Published var soundsEnabled: Bool {
+        didSet {
+            defaults.set(soundsEnabled, forKey: Key.soundsEnabled)
+            notify()
+        }
+    }
+
+    @Published var darkModeEnabled: Bool {
+        didSet {
+            defaults.set(darkModeEnabled, forKey: Key.darkModeEnabled)
+            notify()
+        }
+    }
+
+    @Published var overlayEnabled: Bool {
+        didSet {
+            defaults.set(overlayEnabled, forKey: Key.overlayEnabled)
+            notify()
+        }
+    }
+
+    @Published var cleanupEnabled: Bool {
+        didSet {
+            defaults.set(cleanupEnabled, forKey: Key.cleanupEnabled)
+            notify()
+        }
+    }
+
+    @Published var vocabulary: [String: String] {
+        didSet {
+            if let data = try? JSONEncoder().encode(vocabulary) {
+                defaults.set(data, forKey: Key.vocabulary)
+            }
+            notify()
+        }
+    }
+
+    @Published var streamingEnabled: Bool {
+        didSet {
+            defaults.set(streamingEnabled, forKey: Key.streamingEnabled)
+            notify()
+        }
+    }
+
+    private init() {
+        let storedKeyCode = defaults.object(forKey: Key.hotkeyKeyCode) as? Int
+        self.hotkeyKeyCode = CGKeyCode(storedKeyCode ?? kVK_RightOption)
+
+        // UInt64 doesn't fit cleanly in UserDefaults; store as string.
+        let storedMask = (defaults.string(forKey: Key.hotkeyFlagMask)).flatMap(UInt64.init)
+        self.hotkeyFlagMask = storedMask ?? AppSettings.defaultRightOptionFlagMask
+
+        self.hotkeyDisplayName = defaults.string(forKey: Key.hotkeyDisplayName) ?? "Right Option"
+        self.modelVariant = defaults.string(forKey: Key.modelVariant) ?? "openai_whisper-large-v3_turbo"
+        self.language = defaults.string(forKey: Key.language)
+        self.inputDeviceUID = defaults.string(forKey: Key.inputDeviceUID)
+        self.onboardingCompleted = defaults.bool(forKey: Key.onboardingCompleted)
+        self.soundsEnabled = (defaults.object(forKey: Key.soundsEnabled) as? Bool) ?? true
+        self.darkModeEnabled = (defaults.object(forKey: Key.darkModeEnabled) as? Bool) ?? true
+        self.overlayEnabled = (defaults.object(forKey: Key.overlayEnabled) as? Bool) ?? true
+        self.cleanupEnabled = (defaults.object(forKey: Key.cleanupEnabled) as? Bool) ?? true
+        if let data = defaults.data(forKey: Key.vocabulary),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            self.vocabulary = decoded
+        } else {
+            self.vocabulary = [:]
+        }
+        self.streamingEnabled = (defaults.object(forKey: Key.streamingEnabled) as? Bool) ?? false
+    }
+
+    private func notify() {
+        NotificationCenter.default.post(name: AppSettings.didChange, object: self)
+    }
+
+    // NX_DEVICERALTKEYMASK — isolates right-Option from left-Option.
+    static let defaultRightOptionFlagMask: UInt64 = 0x0000_0040
+
+    static let availableModels: [(id: String, label: String, approxSizeGB: Double)] = [
+        ("openai_whisper-large-v3_turbo", "Large v3 turbo (best quality)", 1.5),
+        ("openai_whisper-small", "Small (faster, lower quality)", 0.5),
+        ("openai_whisper-tiny", "Tiny (fastest, lowest quality)", 0.08),
+    ]
+}

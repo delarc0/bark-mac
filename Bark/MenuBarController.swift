@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CoreAudio
 import os
 
@@ -6,17 +7,88 @@ import os
 final class MenuBarController: NSObject {
     private let log = Logger(subsystem: "se.lab37.bark.mac", category: "MenuBar")
     private let statusItem: NSStatusItem
-    private let recorder: AudioRecorder?
-    private let transcriber = Transcriber()
-    private var selectedDeviceID: AudioDeviceID?
+    private let transcriber: Transcriber
+    private let settings = AppSettings.shared
+    private let dictation: DictationCoordinator
+    private let overlay = OverlayController()
+    private var dictationState: DictationCoordinator.State = .idle
+    private var modelState: Transcriber.State = .unloaded
+    private var axPollTimer: Timer?
+    private var lastHotkeyConfig: (keyCode: CGKeyCode, mask: UInt64) = (AppSettings.shared.hotkeyKeyCode,
+                                                                        AppSettings.shared.hotkeyFlagMask)
 
     override init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        recorder = try? AudioRecorder()
+        let rec = try? AudioRecorder()
+        transcriber = Transcriber(modelVariant: AppSettings.shared.modelVariant)
+        dictation = DictationCoordinator(recorder: rec, transcriber: transcriber)
         super.init()
+
+        dictation.deviceIDProvider = { [weak self] in
+            guard let uid = self?.settings.inputDeviceUID else { return nil }
+            return AudioDeviceCatalog.inputID(matching: uid)
+        }
+        dictation.onStateChanged = { [weak self] state in
+            self?.handleDictationState(state)
+        }
+        dictation.onMicPermissionDenied = { [weak self] in
+            self?.rebuildMenu()
+        }
+
+        // Restart the hotkey tap only when the mapping itself changed — a restart
+        // resets held-state, so unrelated settings changes mid-hold would orphan
+        // the recording session.
+        NotificationCenter.default.addObserver(
+            forName: AppSettings.didChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let config = (self.settings.hotkeyKeyCode, self.settings.hotkeyFlagMask)
+                if config != self.lastHotkeyConfig {
+                    self.lastHotkeyConfig = config
+                    self.dictation.hotkey.restart()
+                }
+                self.rebuildMenu()
+            }
+        }
+
+        // Pause the global hotkey tap while the settings panel is capturing a key.
+        NotificationCenter.default.addObserver(
+            forName: HotkeyRecorder.listeningChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if (note.object as? Bool) == true {
+                    self.dictation.hotkey.stop()
+                } else {
+                    _ = self.dictation.hotkey.start()
+                }
+            }
+        }
+
         configureButton()
         rebuildMenu()
-        Task.detached { [transcriber, log] in
+        startHotkeyIfPossible(promptIfNeeded: false)
+
+        _ = UpdaterController.shared
+
+        if !settings.onboardingCompleted {
+            DispatchQueue.main.async {
+                OnboardingWindowController.shared.present()
+            }
+        }
+
+        Task.detached { [transcriber, log, weak self] in
+            await transcriber.setStateObserver { [weak self] state in
+                Task { @MainActor [weak self] in
+                    self?.modelState = state
+                    self?.rebuildMenu()
+                }
+            }
             do {
                 let t0 = Date()
                 try await transcriber.load()
@@ -28,12 +100,43 @@ final class MenuBarController: NSObject {
         }
     }
 
+    deinit {
+        axPollTimer?.invalidate()
+    }
+
+    private func handleDictationState(_ state: DictationCoordinator.State) {
+        dictationState = state
+        configureButton()
+        switch state {
+        case .idle:
+            overlay.hide()
+        case .recording:
+            overlay.show(.recording)
+        case .transcribing:
+            overlay.show(.transcribing)
+        }
+    }
+
+    private func startHotkeyIfPossible(promptIfNeeded: Bool) {
+        if DictationCoordinator.hasAccessibilityPermission(prompt: promptIfNeeded) {
+            _ = dictation.start()
+        } else {
+            log.info("Accessibility permission not granted; hotkey disabled — polling for grant")
+            startAXPolling()
+        }
+    }
+
     private func configureButton() {
         guard let button = statusItem.button else { return }
-        button.toolTip = "Bark — local dictation"
-        if let icon = Self.loadStatusIcon() {
+        button.toolTip = dictationState == .recording ? "Bark — recording…" : "Bark — local dictation"
+        if dictationState == .recording {
+            button.image = Self.recordingIndicator()
+            button.title = ""
+        } else if let icon = Self.loadStatusIcon() {
             button.image = icon
+            button.title = ""
         } else {
+            button.image = nil
             button.title = "Bark"
         }
     }
@@ -46,30 +149,86 @@ final class MenuBarController: NSObject {
         return image
     }
 
+    private static func recordingIndicator() -> NSImage {
+        let size = NSSize(width: 16, height: 16)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor(red: 1.0, green: 0.2, blue: 0.2, alpha: 1.0).setFill()
+        let rect = NSRect(x: 3, y: 3, width: 10, height: 10)
+        NSBezierPath(ovalIn: rect).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
     private func rebuildMenu() {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        let header = NSMenuItem(title: "Bark v0.1", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: "Bark v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")",
+                                action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
 
-        menu.addItem(deviceMenuItem())
-
-        let test = NSMenuItem(title: "Test Record 3s → /tmp/bark_test.wav",
-                              action: #selector(testRecord),
-                              keyEquivalent: "")
-        test.target = self
-        menu.addItem(test)
-
-        let transcribe = NSMenuItem(title: "Test Record 3s → Transcribe",
-                                    action: #selector(testTranscribe),
+        let hasAX = DictationCoordinator.hasAccessibilityPermission()
+        if hasAX {
+            let status = NSMenuItem(title: "Hold \(settings.hotkeyDisplayName) to dictate",
+                                    action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            menu.addItem(status)
+        } else {
+            let status = NSMenuItem(title: "Grant Accessibility permission…",
+                                    action: #selector(grantAccessibility),
                                     keyEquivalent: "")
-        transcribe.target = self
-        menu.addItem(transcribe)
+            status.target = self
+            menu.addItem(status)
+        }
 
+        if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+            let mic = NSMenuItem(title: "Grant Microphone access…",
+                                 action: #selector(grantMicrophone),
+                                 keyEquivalent: "")
+            mic.target = self
+            menu.addItem(mic)
+        }
+
+        switch modelState {
+        case .unloaded, .loading:
+            let item = NSMenuItem(title: "Loading model…", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        case .failed:
+            let item = NSMenuItem(title: "Model failed to load — Retry",
+                                  action: #selector(retryModelLoad),
+                                  keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        case .ready:
+            break
+        }
         menu.addItem(.separator())
+
+        menu.addItem(deviceMenuItem())
+        menu.addItem(.separator())
+        let settingsItem = NSMenuItem(title: "Settings…",
+                                      action: #selector(openSettings),
+                                      keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        let onboardingItem = NSMenuItem(title: "Show Onboarding…",
+                                        action: #selector(openOnboarding),
+                                        keyEquivalent: "")
+        onboardingItem.target = self
+        menu.addItem(onboardingItem)
+
+        let updatesItem = NSMenuItem(title: "Check for Updates…",
+                                     action: #selector(UpdaterController.checkForUpdates(_:)),
+                                     keyEquivalent: "")
+        updatesItem.target = UpdaterController.shared
+        menu.addItem(updatesItem)
+
         let quit = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -81,10 +240,9 @@ final class MenuBarController: NSObject {
         let parent = NSMenuItem(title: "Input Device", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
 
-        let defaultID = AudioDeviceCatalog.defaultInputID()
         let systemDefaultItem = NSMenuItem(title: "System default", action: #selector(pickSystemDefault), keyEquivalent: "")
         systemDefaultItem.target = self
-        systemDefaultItem.state = (selectedDeviceID == nil) ? .on : .off
+        systemDefaultItem.state = (settings.inputDeviceUID == nil) ? .on : .off
         submenu.addItem(systemDefaultItem)
         submenu.addItem(.separator())
 
@@ -95,10 +253,8 @@ final class MenuBarController: NSObject {
                 keyEquivalent: ""
             )
             item.target = self
-            item.representedObject = NSNumber(value: device.id)
-            let isSelected = selectedDeviceID == device.id ||
-                (selectedDeviceID == nil && device.id == defaultID)
-            item.state = isSelected ? .on : .off
+            item.representedObject = device.uid
+            item.state = (settings.inputDeviceUID == device.uid) ? .on : .off
             submenu.addItem(item)
         }
 
@@ -109,85 +265,73 @@ final class MenuBarController: NSObject {
     // MARK: - Actions
 
     @objc private func pickSystemDefault() {
-        selectedDeviceID = nil
+        settings.inputDeviceUID = nil
         rebuildMenu()
     }
 
     @objc private func pickDevice(_ sender: NSMenuItem) {
-        guard let number = sender.representedObject as? NSNumber else { return }
-        selectedDeviceID = AudioDeviceID(number.uint32Value)
+        guard let uid = sender.representedObject as? String else { return }
+        settings.inputDeviceUID = uid
         rebuildMenu()
     }
 
-    @objc private func testRecord() {
-        guard let recorder else {
-            alert("AudioRecorder unavailable.")
-            return
-        }
-        let deviceID = selectedDeviceID
+    @objc private func openSettings() {
+        SettingsWindowController.shared.present()
+    }
 
-        Task.detached { [weak self] in
-            let result: String
-            do {
-                try recorder.start(deviceID: deviceID)
-                recorder.beginRecording()
-                try await Task.sleep(nanoseconds: 3 * 1_000_000_000)
-                let samples = recorder.endRecording()
-                recorder.stop()
+    @objc private func openOnboarding() {
+        OnboardingWindowController.shared.present()
+    }
 
-                let url = URL(fileURLWithPath: "/tmp/bark_test.wav")
-                try WAVWriter.write(samples: samples, sampleRate: AudioRecorder.targetSampleRate, to: url)
-                result = "Recorded \(samples.count) samples (\(Double(samples.count) / AudioRecorder.targetSampleRate) s) → /tmp/bark_test.wav"
-            } catch {
-                result = "Record failed: \(error.localizedDescription)"
+    @objc private func grantMicrophone() {
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+                Task { @MainActor in self?.rebuildMenu() }
             }
-            await MainActor.run { [weak self] in
-                self?.alert(result)
+        } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func retryModelLoad() {
+        Task.detached { [transcriber, log] in
+            do {
+                try await transcriber.load()
+                await transcriber.warmup()
+            } catch {
+                log.error("Model retry failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
 
-    @objc private func testTranscribe() {
-        guard let recorder else {
-            alert("AudioRecorder unavailable.")
-            return
+    @objc private func grantAccessibility() {
+        // Open System Settings first so the user can toggle; then poll until the
+        // running process is trusted, and start the tap live (no relaunch needed).
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
         }
-        let deviceID = selectedDeviceID
-        let transcriber = self.transcriber
+        // Fire the prompt-flagged check to register Bark in the AX list if not present.
+        _ = DictationCoordinator.hasAccessibilityPermission(prompt: true)
+        startAXPolling()
+        rebuildMenu()
+    }
 
-        let log = self.log
-        Task.detached { [weak self] in
-            let result: String
-            do {
-                try recorder.start(deviceID: deviceID)
-                recorder.beginRecording()
-                try await Task.sleep(nanoseconds: 3 * 1_000_000_000)
-                let samples = recorder.endRecording()
-                recorder.stop()
-                log.info("Captured samples: count=\(samples.count, privacy: .public) durationSec=\(Double(samples.count) / 16000.0, privacy: .public)")
-
-                let t0 = Date()
-                let text = try await withThrowingTaskGroup(of: String.self) { group in
-                    group.addTask { try await transcriber.transcribe(samples: samples) }
-                    group.addTask {
-                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                        throw NSError(domain: "Transcriber", code: 2,
-                                      userInfo: [NSLocalizedDescriptionKey: "Transcription timed out after 30s"])
-                    }
-                    guard let first = try await group.next() else { return "" }
-                    group.cancelAll()
-                    return first
+    private func startAXPolling() {
+        axPollTimer?.invalidate()
+        let deadline = Date().addingTimeInterval(120) // poll for 2 minutes
+        axPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+            Task { @MainActor in
+                guard let self else { timer.invalidate(); return }
+                if DictationCoordinator.hasAccessibilityPermission() {
+                    self.log.info("AX granted — arming hotkey tap")
+                    _ = self.dictation.start()
+                    self.rebuildMenu()
+                    timer.invalidate()
+                    self.axPollTimer = nil
+                } else if Date() > deadline {
+                    timer.invalidate()
+                    self.axPollTimer = nil
                 }
-                log.info("Transcribe elapsed: \(Date().timeIntervalSince(t0), privacy: .public)s")
-                result = text.isEmpty ? "(empty transcription)" : text
-            } catch {
-                result = "Failed: \(error.localizedDescription)"
-            }
-            await MainActor.run { [weak self] in
-                self?.log.info("Transcription result: \(result, privacy: .public)")
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(result, forType: .string)
-                self?.alert("Copied to clipboard:\n\n\(result)")
             }
         }
     }
