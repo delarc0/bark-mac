@@ -19,7 +19,10 @@ settings:
     SWIFT_VERSION: "5.9"
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Manual
-    CODE_SIGN_IDENTITY: "Bark Dev"
+    # Ad-hoc by default so a clean checkout builds on any Mac. install.sh
+    # upgrades this to the optional self-signed "Bark Dev" identity when present
+    # (that keeps TCC grants stable across rebuilds — see scripts/create-signing-cert.sh).
+    CODE_SIGN_IDENTITY: "-"
     ENABLE_HARDENED_RUNTIME: YES
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
@@ -33,10 +36,16 @@ targets:
       - package: WhisperKit
       - package: Sparkle
     postBuildScripts:
-      - name: Deep re-sign with Bark Dev (stabilize TCC grants across rebuilds)
+      - name: Deep re-sign (unify Team IDs; stabilize TCC grants across rebuilds)
         script: |
           if [ "${CONFIGURATION}" = "Debug" ]; then
-            /usr/bin/codesign --force --deep --sign "Bark Dev" \
+            # The app compiles ad-hoc so the SPM dependency targets never demand
+            # a development team. This deep re-sign unifies every nested dylib
+            # under one identity (fixes the Team-ID-mismatch load crash) and, when
+            # install.sh passes BARK_SIGN_IDENTITY="Bark Dev", upgrades to the
+            # self-signed cert so TCC grants survive rebuilds. Falls back to ad-hoc.
+            IDENTITY="${BARK_SIGN_IDENTITY:-${EXPANDED_CODE_SIGN_IDENTITY_NAME:--}}"
+            /usr/bin/codesign --force --deep --sign "$IDENTITY" \
               "${BUILT_PRODUCTS_DIR}/${WRAPPER_NAME}" || true
           fi
         runOnlyWhenInstalling: false

@@ -17,6 +17,14 @@ Native macOS dictation tool. Swift/AppKit + WhisperKit. Mac-only fork of the cro
 
 ## Build / run
 
+Canonical path (works on any Apple Silicon Mac, no Apple account):
+
+```bash
+./install.sh
+```
+
+Builds, signs, installs to `/Applications`, launches. Manual path:
+
 ```bash
 brew install xcodegen
 xcodegen
@@ -25,6 +33,8 @@ open build/Build/Products/Debug/Bark.app
 ```
 
 First launch triggers WhisperKit model download (~1.5 GB for large-v3-turbo) and prompts for mic permission. Subsequent launches are fast; model cached at `~/Documents/huggingface/models/argmaxinc/whisperkit-coreml/`.
+
+For sharing / handing to an agent: `AGENTS.md` is the install guide, `README.md` is the human intro.
 
 ## Compute path (important)
 
@@ -41,7 +51,7 @@ Env vars don't propagate reliably through `open`, so for the env flag, launch th
 ## Conventions
 
 - **No code comments** unless genuinely non-obvious (a hidden invariant, a workaround for a specific bug). Don't narrate what the code does.
-- Ad-hoc codesigning (`CODE_SIGN_IDENTITY: "-"`) until Apple Developer ID is approved (applied 2026-04-18, pending). Limitations until then: no SMAppService login items, permissions reset on each rebuild.
+- **Signing (until Apple Developer ID lands):** `project.yml` compiles ad-hoc (`CODE_SIGN_IDENTITY: "-"`) so a clean checkout builds on any Mac and the SPM dependency targets never demand a development team. The post-build phase deep-re-signs the bundle to unify nested-dylib Team IDs and, when `install.sh` passes `BARK_SIGN_IDENTITY="Bark Dev"` (the optional self-signed cert from `scripts/create-signing-cert.sh`), upgrades to it so TCC grants survive rebuilds. Never pass `CODE_SIGN_IDENTITY="Bark Dev"` on the xcodebuild CLI — it leaks to the SPM targets and fails the build; the identity is applied only by the post-build re-sign. Ad-hoc builds still reset permissions on each rebuild; no SMAppService login items until Dev ID.
 - UserDefaults for settings, not migrated from Python Bark's `bark_config.json`. Clean slate.
 
 ## Roadmap status (2026-04-18)
