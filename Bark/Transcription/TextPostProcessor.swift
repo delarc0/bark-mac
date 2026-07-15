@@ -1,13 +1,23 @@
 import Foundation
+import os
 
 enum TextPostProcessor {
-    private static let fillers: Set<String> = ["um", "uh", "uhh", "uhm", "erm", "hmm", "mhm"]
+    // Compiled once; recompiling on every paste (plus one per vocab entry) is
+    // pure waste on the hot path between transcription and paste.
+    private static let fillerRegex = try? NSRegularExpression(
+        pattern: #"\b(um|uh|uhh|uhm|erm|hmm|mhm)\b[,.]?"#, options: .caseInsensitive)
+    private static let whitespaceRegex = try? NSRegularExpression(pattern: #"\s+"#)
+    private static let sentenceStartRegex = try? NSRegularExpression(pattern: #"(^|[.!?]\s+)([a-z])"#)
+    private static let vocabRegexCache = OSAllocatedUnfairLock(initialState: [String: NSRegularExpression]())
 
     static func process(_ raw: String, cleanup: Bool, vocabulary: [String: String]) -> String {
         var text = raw
         if cleanup {
             text = stripFillers(text)
-            text = collapseWhitespace(text)
+            // Trim before capitalizing: a stripped sentence-initial filler
+            // ("Um, testing") leaves a leading space that would otherwise keep
+            // the ^ anchor from seeing the new first word.
+            text = collapseWhitespace(text).trimmingCharacters(in: .whitespacesAndNewlines)
             text = capitalizeSentences(text)
         }
         if !vocabulary.isEmpty {
@@ -17,17 +27,13 @@ enum TextPostProcessor {
     }
 
     private static func stripFillers(_ text: String) -> String {
-        let pattern = #"\b(um|uh|uhh|uhm|erm|hmm|mhm)\b[,.]?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
-            return text
-        }
+        guard let regex = fillerRegex else { return text }
         let range = NSRange(text.startIndex..., in: text)
         return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
     }
 
     private static func collapseWhitespace(_ text: String) -> String {
-        let pattern = #"\s+"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        guard let regex = whitespaceRegex else { return text }
         let range = NSRange(text.startIndex..., in: text)
         let singleSpaced = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: " ")
         return singleSpaced.replacingOccurrences(of: " ,", with: ",")
@@ -37,8 +43,7 @@ enum TextPostProcessor {
     }
 
     private static func capitalizeSentences(_ text: String) -> String {
-        let pattern = #"(^|[.!?]\s+)([a-z])"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        guard let regex = sentenceStartRegex else { return text }
         let ns = text as NSString
         var result = text
         var offset = 0
@@ -54,13 +59,29 @@ enum TextPostProcessor {
         return result
     }
 
+    private static func vocabRegex(for term: String) -> NSRegularExpression? {
+        let cached = vocabRegexCache.withLock { $0[term] }
+        if let cached { return cached }
+        let escaped = NSRegularExpression.escapedPattern(for: term)
+        guard let regex = try? NSRegularExpression(pattern: #"\b"# + escaped + #"\b"#,
+                                                   options: .caseInsensitive) else { return nil }
+        vocabRegexCache.withLock { cache in
+            if cache.count > 256 { cache.removeAll(keepingCapacity: true) }  // vocab edits are rare; cap defensively
+            cache[term] = regex
+        }
+        return regex
+    }
+
     private static func applyVocabulary(_ text: String, dict: [String: String]) -> String {
         var result = text
-        for (from, to) in dict {
-            guard !from.isEmpty else { continue }
-            let escaped = NSRegularExpression.escapedPattern(for: from)
-            let pattern = #"\b"# + escaped + #"\b"#
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+        // Dictionary iteration order is nondeterministic; sort longest-first so
+        // overlapping rules resolve the same way every run (specific beats prefix).
+        let ordered = dict.sorted {
+            if $0.key.count != $1.key.count { return $0.key.count > $1.key.count }
+            return $0.key < $1.key
+        }
+        for (from, to) in ordered {
+            guard !from.isEmpty, let regex = vocabRegex(for: from) else { continue }
             let range = NSRange(result.startIndex..., in: result)
             result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: to)
         }

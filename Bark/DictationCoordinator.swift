@@ -27,6 +27,7 @@ final class DictationCoordinator {
     private var maxDurationTimer: Timer?
     private var sessionStreaming = false
     private var sessionLanguage: String?
+    private var heldAwaitingMicGrant = false
 
     var deviceIDProvider: (() -> AudioDeviceID?)?
     var onStateChanged: ((State) -> Void)?
@@ -73,7 +74,17 @@ final class DictationCoordinator {
         case .authorized:
             break
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { _ in }
+            // First-ever press: request access, and if the user is still holding
+            // the key when the grant lands, start the session instead of
+            // discarding the hold.
+            heldAwaitingMicGrant = true
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                Task { @MainActor in
+                    guard let self, granted, self.heldAwaitingMicGrant else { return }
+                    self.heldAwaitingMicGrant = false
+                    self.handlePressed()
+                }
+            }
             return
         default:
             log.error("Microphone permission denied — cannot record")
@@ -141,6 +152,7 @@ final class DictationCoordinator {
     }
 
     private func handleReleased() {
+        heldAwaitingMicGrant = false
         guard state == .recording, let recorder else { return }
         chunker.stop()
         maxDurationTimer?.invalidate()

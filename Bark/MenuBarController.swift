@@ -4,7 +4,7 @@ import CoreAudio
 import os
 
 @MainActor
-final class MenuBarController: NSObject {
+final class MenuBarController: NSObject, NSMenuDelegate {
     private let log = Logger(subsystem: "se.lab37.bark.mac", category: "MenuBar")
     private let statusItem: NSStatusItem
     private let transcriber: Transcriber
@@ -14,6 +14,7 @@ final class MenuBarController: NSObject {
     private var dictationState: DictationCoordinator.State = .idle
     private var modelState: Transcriber.State = .unloaded
     private var axPollTimer: Timer?
+    private let statusMenu = NSMenu()
     private var lastHotkeyConfig: (keyCode: CGKeyCode, mask: UInt64) = (AppSettings.shared.hotkeyKeyCode,
                                                                         AppSettings.shared.hotkeyFlagMask)
 
@@ -70,6 +71,8 @@ final class MenuBarController: NSObject {
             }
         }
 
+        statusMenu.delegate = self
+        statusItem.menu = statusMenu
         configureButton()
         rebuildMenu()
         startHotkeyIfPossible(promptIfNeeded: false)
@@ -89,14 +92,9 @@ final class MenuBarController: NSObject {
                     self?.rebuildMenu()
                 }
             }
-            do {
-                let t0 = Date()
-                try await transcriber.load()
-                log.info("Eager load complete in \(Date().timeIntervalSince(t0), privacy: .public)s")
-                await transcriber.warmup()
-            } catch {
-                log.error("Eager load failed: \(error.localizedDescription, privacy: .public)")
-            }
+            let t0 = Date()
+            await transcriber.warmupSelfHealing()
+            log.info("Eager load + warmup finished in \(Date().timeIntervalSince(t0), privacy: .public)s")
         }
     }
 
@@ -128,32 +126,46 @@ final class MenuBarController: NSObject {
 
     private func configureButton() {
         guard let button = statusItem.button else { return }
-        button.toolTip = dictationState == .recording ? "Bark — recording…" : "Bark — local dictation"
-        if dictationState == .recording {
-            button.image = Self.recordingIndicator()
+        switch dictationState {
+        case .recording:
+            button.toolTip = "Bark — recording…"
+            button.image = Self.recordingIndicator
             button.title = ""
-        } else if let icon = Self.loadStatusIcon() {
-            button.image = icon
+        case .transcribing:
+            // Without this, overlay-off users get zero feedback after release.
+            button.toolTip = "Bark — transcribing…"
+            button.image = Self.transcribingIndicator
             button.title = ""
-        } else {
-            button.image = nil
-            button.title = "Bark"
+        case .idle:
+            button.toolTip = "Bark — local dictation"
+            if let icon = Self.statusIcon {
+                button.image = icon
+                button.title = ""
+            } else {
+                button.image = nil
+                button.title = "Bark"
+            }
         }
     }
 
-    private static func loadStatusIcon() -> NSImage? {
+    // Cached: configureButton runs on every state change (twice per dictation);
+    // re-reading and re-decoding the PNG each time is wasted disk I/O.
+    private static let statusIcon: NSImage? = {
         guard let url = Bundle.main.url(forResource: "Icon", withExtension: "png"),
               let image = NSImage(contentsOf: url) else { return nil }
         image.size = NSSize(width: 20, height: 20)
         image.isTemplate = false
         return image
-    }
+    }()
 
-    private static func recordingIndicator() -> NSImage {
+    private static let recordingIndicator = dotIndicator(NSColor(red: 1.0, green: 0.2, blue: 0.2, alpha: 1.0))
+    private static let transcribingIndicator = dotIndicator(NSColor(red: 1.0, green: 0.84, blue: 0.0, alpha: 1.0))
+
+    private static func dotIndicator(_ color: NSColor) -> NSImage {
         let size = NSSize(width: 16, height: 16)
         let image = NSImage(size: size)
         image.lockFocus()
-        NSColor(red: 1.0, green: 0.2, blue: 0.2, alpha: 1.0).setFill()
+        color.setFill()
         let rect = NSRect(x: 3, y: 3, width: 10, height: 10)
         NSBezierPath(ovalIn: rect).fill()
         image.unlockFocus()
@@ -161,8 +173,15 @@ final class MenuBarController: NSObject {
         return image
     }
 
+    // Devices come and go between menu opens; rebuild so the Input Device
+    // submenu never shows an unplugged mic or misses a fresh one.
+    nonisolated func menuWillOpen(_ menu: NSMenu) {
+        MainActor.assumeIsolated { rebuildMenu() }
+    }
+
     private func rebuildMenu() {
-        let menu = NSMenu()
+        let menu = statusMenu
+        menu.removeAllItems()
         menu.autoenablesItems = false
 
         let header = NSMenuItem(title: "Bark v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")",
@@ -233,7 +252,7 @@ final class MenuBarController: NSObject {
         quit.target = self
         menu.addItem(quit)
 
-        statusItem.menu = menu
+
     }
 
     private func deviceMenuItem() -> NSMenuItem {
@@ -294,13 +313,8 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func retryModelLoad() {
-        Task.detached { [transcriber, log] in
-            do {
-                try await transcriber.load()
-                await transcriber.warmup()
-            } catch {
-                log.error("Model retry failed: \(error.localizedDescription, privacy: .public)")
-            }
+        Task.detached { [transcriber] in
+            await transcriber.warmupSelfHealing()
         }
     }
 
@@ -340,17 +354,4 @@ final class MenuBarController: NSObject {
         NSApplication.shared.terminate(nil)
     }
 
-    @MainActor
-    private func alert(_ message: String) {
-        let a = NSAlert()
-        a.messageText = "Bark"
-        a.informativeText = message
-        a.alertStyle = .informational
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        a.window.level = .floating
-        a.window.orderFrontRegardless()
-        a.runModal()
-        NSApp.setActivationPolicy(.accessory)
-    }
 }

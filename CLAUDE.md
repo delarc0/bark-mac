@@ -38,15 +38,13 @@ For sharing / handing to an agent: `AGENTS.md` is the install guide, `README.md`
 
 ## Compute path (important)
 
-`Transcriber` defaults to **GPU encoder + ANE decoder** — the optimal Apple Silicon path. Env override:
+`Transcriber` defaults to **GPU encoder + ANE decoder** — the optimal Apple Silicon path. But the ANE decoder path **wedges (indefinite busy-spin) on some chips**: confirmed on M1 (2026-04-18) and **M2 Max** (beta report, 2026-07). M5 Pro works. Do NOT assume the hang is M1-only.
 
-```bash
-BARK_CPU_ONLY=1 ./build/Build/Products/Debug/Bark.app/Contents/MacOS/Bark
-```
+Fallback is `cpuAndGPU` for both models, reachable three ways:
 
-forces `cpuAndGPU` for both. **Required on M1** — ANE hangs indefinitely on large-v3-turbo on M1 hardware (confirmed 2026-04-18). **M5 Pro: ANE path works, no override needed** (validated 2026-04-18).
-
-Env vars don't propagate reliably through `open`, so for the env flag, launch the binary directly.
+1. **Self-heal (automatic):** `Transcriber.warmupSelfHealing()` runs the launch warmup under a 30s wedge detector; healthy warmup is 1-8s. On timeout it persists `computeCpuOnly = true`, rebuilds the pipeline on CPU+GPU, and re-warms. The wedged task cannot be cancelled (WhisperKit limitation) and may spin at ~100% CPU until relaunch.
+2. **Settings → Model → "Use CPU + GPU only"** — persisted UserDefaults toggle (`transcriber.cpuOnly`), survives Finder relaunches.
+3. **Env override:** `BARK_CPU_ONLY=1 ./build/Build/Products/Debug/Bark.app/Contents/MacOS/Bark`. Env vars don't propagate reliably through `open`, so launch the binary directly. Mostly useful for testing; users should rely on 1 or 2.
 
 ## Conventions
 
@@ -128,6 +126,6 @@ Env vars don't propagate reliably through `open`, so for the env flag, launch th
 
 ## When something breaks
 
-- Transcription hangs silently on M1 → ANE is wedged. Kill Bark, relaunch with `BARK_CPU_ONLY=1`.
+- Transcription hangs silently (M1, M2 Max, possibly others) → ANE is wedged. The launch self-heal should catch this and flip to CPU+GPU automatically; if it didn't, toggle Settings → Model → "Use CPU + GPU only" and relaunch.
 - "AudioObjectRemovePropertyListener: no object" spam → AirPods/BT device hot-swapped mid-stream. Benign but audio stream may need restart.
 - Model download fails → check `~/Documents/huggingface/` permissions; HuggingFace CDN occasionally 403s.

@@ -129,6 +129,16 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    // Backed by barkCpuOnlyDefaultsKey so the Transcriber actor can read it
+    // off-main via UserDefaults. Set manually in Settings → Model, or
+    // automatically by the warmup self-heal when the ANE path wedges.
+    @Published var computeCpuOnly: Bool {
+        didSet {
+            defaults.set(computeCpuOnly, forKey: barkCpuOnlyDefaultsKey)
+            notify()
+        }
+    }
+
     private init() {
         let storedKeyCode = defaults.object(forKey: Key.hotkeyKeyCode) as? Int
         self.hotkeyKeyCode = CGKeyCode(storedKeyCode ?? kVK_RightOption)
@@ -153,6 +163,7 @@ final class AppSettings: ObservableObject {
             self.vocabulary = [:]
         }
         self.streamingEnabled = (defaults.object(forKey: Key.streamingEnabled) as? Bool) ?? false
+        self.computeCpuOnly = defaults.bool(forKey: barkCpuOnlyDefaultsKey)
     }
 
     private func notify() {

@@ -235,23 +235,3 @@ final class AudioRecorder {
     }
 }
 
-// MARK: - WAV writing (test helper)
-
-enum WAVWriter {
-    static func write(samples: [Float], sampleRate: Double, to url: URL) throws {
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate,
-            channels: 1,
-            interleaved: false
-        )!
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
-        guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else {
-            throw NSError(domain: "WAVWriter", code: 1)
-        }
-        buf.frameLength = AVAudioFrameCount(samples.count)
-        let channel = buf.floatChannelData![0]
-        for i in 0..<samples.count { channel[i] = samples[i] }
-        try file.write(from: buf)
-    }
-}

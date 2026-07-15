@@ -14,6 +14,20 @@ final class SettingsWindowController: NSWindowController {
         window.setContentSize(NSSize(width: 560, height: 360))
         window.center()
         super.init(window: window)
+
+        // present() flips to .regular so the window can come forward; without
+        // this, closing Settings leaves Bark as a permanent Dock app.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                if !(NSApp.windows.contains { $0.isVisible && $0 !== window && $0.canBecomeKey }) {
+                    NSApp.setActivationPolicy(.accessory)
+                }
+            }
+        }
     }
 
     required init?(coder: NSCoder) {

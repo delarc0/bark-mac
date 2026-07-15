@@ -8,14 +8,6 @@ final class OverlayModel: ObservableObject {
         case idle
         case recording
         case transcribing
-
-        var label: String {
-            switch self {
-            case .idle: return ""
-            case .recording: return "Listening…"
-            case .transcribing: return "Transcribing…"
-            }
-        }
     }
 
     @Published var state: State = .idle
@@ -161,7 +153,11 @@ final class OverlayController {
     private func positionBottomCenter() {
         panel.layoutIfNeeded()
         let size = panel.frame.size
-        let targetScreen = NSScreen.screens.first(where: { NSScreen.main == $0 }) ?? NSScreen.main ?? NSScreen.screens.first
+        // The screen with the pointer is where the user is typing; NSScreen.main
+        // (key-window screen) is often a different display for a menu-bar app.
+        let mouse = NSEvent.mouseLocation
+        let targetScreen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
+            ?? NSScreen.main ?? NSScreen.screens.first
         guard let screen = targetScreen else { return }
         let visible = screen.visibleFrame
         let x = visible.midX - size.width / 2

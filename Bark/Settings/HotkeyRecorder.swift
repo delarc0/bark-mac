@@ -76,6 +76,13 @@ struct HotkeyRecorder: View {
     private func capture(_ event: NSEvent) {
         let keyCode = CGKeyCode(event.keyCode)
 
+        // Escape cancels capture — binding it as the hotkey is never what the
+        // user reaching for the universal "get me out" key means.
+        if event.type == .keyDown && Int(keyCode) == kVK_Escape {
+            stopListening()
+            return
+        }
+
         if let info = HotkeyRecorder.modifierLookup[Int(keyCode)] {
             applyPreset(keyCode: keyCode, mask: info.mask, name: info.name)
             stopListening()

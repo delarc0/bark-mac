@@ -212,6 +212,21 @@ private struct ModelTab: View {
             Divider()
 
             HStack {
+                Text("Compute").frame(width: 120, alignment: .trailing)
+                Toggle("Use CPU + GPU only (fixes hangs on some Macs)", isOn: $settings.computeCpuOnly)
+                    .toggleStyle(.switch)
+                Spacer()
+            }
+
+            Text("The Neural Engine path hangs on some chips (M1, M2 Max). Bark switches this on automatically if it detects a hang at launch. Takes effect on next launch.")
+                .foregroundStyle(.secondary)
+                .font(.system(size: 11))
+                .padding(.leading, 128)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            HStack {
                 Text("Streaming").frame(width: 120, alignment: .trailing)
                 Toggle("Transcribe chunks while you speak (experimental)", isOn: $settings.streamingEnabled)
                     .toggleStyle(.switch)
@@ -287,33 +302,36 @@ private struct VocabularyEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             let pairs = settings.vocabulary.sorted(by: { $0.key < $1.key })
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(pairs, id: \.key) { pair in
-                    HStack {
-                        Text(pair.key)
-                            .font(.system(size: 12, design: .monospaced))
-                            .frame(width: 120, alignment: .leading)
-                        Image(systemName: "arrow.right")
-                            .foregroundStyle(.secondary)
-                            .font(.system(size: 10))
-                        Text(pair.value)
-                            .font(.system(size: 12, design: .monospaced))
-                        Spacer()
-                        Button(action: { remove(pair.key) }) {
-                            Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(pairs, id: \.key) { pair in
+                        HStack {
+                            Text(pair.key)
+                                .font(.system(size: 12, design: .monospaced))
+                                .frame(width: 120, alignment: .leading)
+                            Image(systemName: "arrow.right")
+                                .foregroundStyle(.secondary)
+                                .font(.system(size: 10))
+                            Text(pair.value)
+                                .font(.system(size: 12, design: .monospaced))
+                            Spacer()
+                            Button(action: { remove(pair.key) }) {
+                                Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.vertical, 2)
                     }
-                    .padding(.vertical, 2)
+                    if pairs.isEmpty {
+                        Text("No replacements yet. Add pairs like westy → Westie below.")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: 11))
+                    }
                 }
-                if pairs.isEmpty {
-                    Text("No replacements yet. Add pairs like westy → Westie below.")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 11))
-                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxHeight: 140)
             .background(
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color(nsColor: .controlBackgroundColor))
@@ -323,10 +341,12 @@ private struct VocabularyEditor: View {
                 TextField("from", text: $draftFrom)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 120)
+                    .onSubmit { add() }
                 Image(systemName: "arrow.right").foregroundStyle(.secondary)
                 TextField("to", text: $draftTo)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 140)
+                    .onSubmit { add() }
                 Button("Add") { add() }
                     .disabled(draftFrom.trimmingCharacters(in: .whitespaces).isEmpty)
             }

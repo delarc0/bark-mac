@@ -2,6 +2,10 @@ import Foundation
 import WhisperKit
 import os
 
+// Shared between AppSettings (MainActor) and the Transcriber actor, which reads
+// it via thread-safe UserDefaults during load().
+let barkCpuOnlyDefaultsKey = "transcriber.cpuOnly"
+
 actor Transcriber {
 
     enum State: Sendable {
@@ -34,9 +38,13 @@ actor Transcriber {
         onStateChanged?(new)
     }
 
+    static func cpuOnlyRequested() -> Bool {
+        ProcessInfo.processInfo.environment["BARK_CPU_ONLY"] == "1"
+            || UserDefaults.standard.bool(forKey: barkCpuOnlyDefaultsKey)
+    }
+
     private static func resolvedCompute() -> ModelComputeOptions {
-        let cpuOnly = ProcessInfo.processInfo.environment["BARK_CPU_ONLY"] == "1"
-        if cpuOnly {
+        if cpuOnlyRequested() {
             return ModelComputeOptions(audioEncoderCompute: .cpuAndGPU,
                                        textDecoderCompute: .cpuAndGPU)
         }
@@ -79,10 +87,77 @@ actor Transcriber {
             if case .ready = state {} else { try await load() }
             let silent = [Float](repeating: 0, count: 48000)  // 3s primes the decoder closer to typical clips
             let t0 = Date()
-            _ = try await transcribe(samples: silent)
+            _ = try await transcribe(samples: silent, language: "en")  // pin: don't language-detect silence
             log.info("Warmup complete in \(Date().timeIntervalSince(t0), privacy: .public)s")
         } catch {
             log.error("Warmup failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Launch-time warmup with a wedge detector. The ANE decoder path hangs
+    /// indefinitely (busy-spin) on some chips — confirmed M1 and M2 Max — and
+    /// WhisperKit offers no cancellation, so a healthy-warmup timeout is the only
+    /// signal. On a wedge we persist the CPU+GPU fallback and rebuild the
+    /// pipeline, so every later launch (including Finder ones, where
+    /// BARK_CPU_ONLY can't reach) starts on the working path.
+    func warmupSelfHealing() async {
+        // Healthy warmup is 1-8s measured (M1 CPU path through M5 Pro ANE).
+        // The model is already compiled by load(); warmup never legitimately
+        // takes 30s — but a wedge holds this forever.
+        if await warmupCompleted(within: 30) { return }
+
+        guard !Self.cpuOnlyRequested() else {
+            log.error("Warmup timed out on the CPU+GPU path — no further fallback available")
+            return
+        }
+
+        log.error("Warmup wedged on the ANE decoder path — self-healing to CPU+GPU (persisted). The wedged task cannot be cancelled and may spin until relaunch.")
+        await MainActor.run { AppSettings.shared.computeCpuOnly = true }
+        pipeline = nil
+        loadTask = nil
+        setState(.unloaded)
+        if await warmupCompleted(within: 120) {
+            log.info("Self-heal succeeded — running on CPU+GPU")
+        } else {
+            log.error("Self-heal reload also failed to warm up")
+        }
+    }
+
+    private func warmupCompleted(within seconds: TimeInterval) async -> Bool {
+        let work = Task { [weak self] in
+            guard let self else { return }
+            try await self.load()
+            _ = try await self.transcribe(samples: [Float](repeating: 0, count: 48000), language: "en")
+        }
+        let timeout = Task {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            return
+        }
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let finished = OSAllocatedUnfairLock(initialState: false)
+            @Sendable func resumeOnce(_ value: Bool) {
+                let first = finished.withLock { done -> Bool in
+                    if done { return false }
+                    done = true
+                    return true
+                }
+                if first {
+                    timeout.cancel()
+                    cont.resume(returning: value)
+                }
+            }
+            Task {
+                do {
+                    try await work.value
+                    resumeOnce(true)
+                } catch {
+                    resumeOnce(true)  // errored ≠ wedged; load()/transcribe() surface errors themselves
+                }
+            }
+            Task {
+                await timeout.value
+                resumeOnce(false)
+            }
         }
     }
 
@@ -98,7 +173,14 @@ actor Transcriber {
         options.usePrefillPrompt = true
         options.skipSpecialTokens = true
         options.withoutTimestamps = true
-        if let language { options.language = language }
+        if let language {
+            options.language = language
+        } else {
+            // "Auto" must actually detect: WhisperKit defaults detectLanguage to
+            // !usePrefillPrompt, and with prefill on + language nil the decoder
+            // forces <|en|> — Swedish speech came out as English "translation".
+            options.detectLanguage = true
+        }
 
         let trimmed = Self.trimSilence(samples)
         if trimmed.count < samples.count {
