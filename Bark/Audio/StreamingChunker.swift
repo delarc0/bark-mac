@@ -9,7 +9,7 @@ final class StreamingChunker {
     private var chunkStart: Date?
     private var hasSpeech = false
 
-    /// RMS level below this is treated as silence.
+    /// Peak level below this is treated as silence (AudioLevelMonitor reports peak amplitude).
     private let silenceThreshold: Float = 0.015
     /// Sustained silence this long closes the current chunk.
     private let silenceMinDuration: TimeInterval = 0.4
@@ -61,8 +61,12 @@ final class StreamingChunker {
         }()
 
         if silenceBounded || chunkElapsed >= chunkMaxDuration {
-            log.info("Chunk closed: elapsed=\(chunkElapsed, privacy: .public)s reason=\(silenceBounded ? "silence" : "max", privacy: .public)")
-            onChunkReady?()
+            if hasSpeech {
+                log.info("Chunk closed: elapsed=\(chunkElapsed, privacy: .public)s reason=\(silenceBounded ? "silence" : "max", privacy: .public)")
+                onChunkReady?()
+            } else {
+                log.info("Silent chunk discarded after \(chunkElapsed, privacy: .public)s")
+            }
             self.chunkStart = now
             self.silenceStart = nil
             self.hasSpeech = false

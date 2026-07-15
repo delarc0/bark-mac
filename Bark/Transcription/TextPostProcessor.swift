@@ -7,7 +7,8 @@ enum TextPostProcessor {
     private static let fillerRegex = try? NSRegularExpression(
         pattern: #"\b(um|uh|uhh|uhm|erm|hmm|mhm)\b[,.]?"#, options: .caseInsensitive)
     private static let whitespaceRegex = try? NSRegularExpression(pattern: #"\s+"#)
-    private static let sentenceStartRegex = try? NSRegularExpression(pattern: #"(^|[.!?]\s+)([a-z])"#)
+    // \p{Ll}: any Unicode lowercase letter — [a-z] misses å/ä/ö and friends.
+    private static let sentenceStartRegex = try? NSRegularExpression(pattern: #"(^|[.!?]\s+)(\p{Ll})"#)
     private static let vocabRegexCache = OSAllocatedUnfairLock(initialState: [String: NSRegularExpression]())
 
     static func process(_ raw: String, cleanup: Bool, vocabulary: [String: String]) -> String {
@@ -54,7 +55,8 @@ enum TextPostProcessor {
             let before = (result as NSString).substring(with: adjusted)
             let upper = before.uppercased()
             result = (result as NSString).replacingCharacters(in: adjusted, with: upper)
-            offset += upper.count - before.count
+            // NSRange offsets are UTF-16 units; Character counts diverge (ß → SS).
+            offset += (upper as NSString).length - (before as NSString).length
         }
         return result
     }
@@ -83,7 +85,9 @@ enum TextPostProcessor {
         for (from, to) in ordered {
             guard !from.isEmpty, let regex = vocabRegex(for: from) else { continue }
             let range = NSRange(result.startIndex..., in: result)
-            result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: to)
+            // escapedTemplate: a replacement containing $ or \ must stay literal.
+            result = regex.stringByReplacingMatches(in: result, options: [], range: range,
+                                                    withTemplate: NSRegularExpression.escapedTemplate(for: to))
         }
         return result
     }

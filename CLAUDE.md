@@ -42,7 +42,7 @@ For sharing / handing to an agent: `AGENTS.md` is the install guide, `README.md`
 
 Fallback is `cpuAndGPU` for both models, reachable three ways:
 
-1. **Self-heal (automatic):** `Transcriber.warmupSelfHealing()` runs the launch warmup under a 30s wedge detector; healthy warmup is 1-8s. On timeout it persists `computeCpuOnly = true`, rebuilds the pipeline on CPU+GPU, and re-warms. The wedged task cannot be cancelled (WhisperKit limitation) and may spin at ~100% CPU until relaunch.
+1. **Self-heal (automatic):** `Transcriber.warmupSelfHealing()` runs the launch warmup under a 30s wedge detector; healthy warmup is 1-8s. On timeout it persists the CPU+GPU fallback (`transcriber.cpuOnly`), rebuilds the pipeline on CPU+GPU, and re-warms. The wedged task cannot be cancelled (WhisperKit limitation) and may spin at ~100% CPU until relaunch.
 2. **Settings → Model → "Use CPU + GPU only"** — persisted UserDefaults toggle (`transcriber.cpuOnly`), survives Finder relaunches.
 3. **Env override:** `BARK_CPU_ONLY=1 ./build/Build/Products/Debug/Bark.app/Contents/MacOS/Bark`. Env vars don't propagate reliably through `open`, so launch the binary directly. Mostly useful for testing; users should rely on 1 or 2.
 
@@ -62,7 +62,7 @@ Fallback is `cpuAndGPU` for both models, reachable three ways:
 - [x] Phase 5a — Onboarding flow + Sparkle SDK wired (infra only; can't ship updates until Dev ID lands) — shipped 2026-04-18
 - [ ] Phase 5b — Dev ID signing + notarization + live appcast (blocked on Apple Developer ID approval)
 
-**Resumed 2026-04-18** on M5 Pro 48 GB. ANE path validated — `BARK_CPU_ONLY` no longer required as default. Phase 3 landed same day; next up: Phase 4.
+**Resumed 2026-04-18** on M5 Pro 48 GB. Everything through Phase 5a has shipped; 5b (Dev ID) is the open item.
 
 ## Phase 3 shipped
 

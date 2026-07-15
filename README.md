@@ -34,7 +34,7 @@ Handing this to a coding agent? Point it at [AGENTS.md](AGENTS.md).
 - Pastes at the cursor in any app; your clipboard is saved and restored
 - Menu-bar overlay pill that reacts to your voice
 - Text cleanup (filler removal, capitalization) and custom word replacements
-- Feedback chimes, input-device picker, onboarding flow, in-app updates (Sparkle)
+- Feedback chimes, input-device picker, onboarding flow, update checks wired (Sparkle; shipping updates awaits Developer ID)
 
 ## Signing note
 

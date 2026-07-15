@@ -15,12 +15,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var modelState: Transcriber.State = .unloaded
     private var axPollTimer: Timer?
     private let statusMenu = NSMenu()
+    private var menuIsTracking = false
     private var lastHotkeyConfig: (keyCode: CGKeyCode, mask: UInt64) = (AppSettings.shared.hotkeyKeyCode,
                                                                         AppSettings.shared.hotkeyFlagMask)
 
     override init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        let rec = try? AudioRecorder()
+        let rec: AudioRecorder?
+        do {
+            rec = try AudioRecorder()
+        } catch {
+            rec = nil
+            Logger(subsystem: "se.lab37.bark.mac", category: "MenuBar")
+                .error("AudioRecorder init failed — dictation disabled: \(error.localizedDescription, privacy: .public)")
+        }
         transcriber = Transcriber(modelVariant: AppSettings.shared.modelVariant)
         dictation = DictationCoordinator(recorder: rec, transcriber: transcriber)
         super.init()
@@ -176,10 +184,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // Devices come and go between menu opens; rebuild so the Input Device
     // submenu never shows an unplugged mic or misses a fresh one.
     nonisolated func menuWillOpen(_ menu: NSMenu) {
-        MainActor.assumeIsolated { rebuildMenu() }
+        MainActor.assumeIsolated {
+            menuIsTracking = true
+            rebuildMenu()
+        }
+    }
+
+    nonisolated func menuDidClose(_ menu: NSMenu) {
+        MainActor.assumeIsolated { menuIsTracking = false }
     }
 
     private func rebuildMenu() {
+        // Observers (model state, settings) may fire while the menu is open;
+        // mutating a tracking menu flickers or dismisses it. menuWillOpen
+        // rebuilds fresh on the next open anyway.
+        guard !menuIsTracking else { return }
         let menu = statusMenu
         menu.removeAllItems()
         menu.autoenablesItems = false
@@ -333,7 +352,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func startAXPolling() {
         axPollTimer?.invalidate()
         let deadline = Date().addingTimeInterval(120) // poll for 2 minutes
-        axPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+        // .common mode: a default-mode timer stops firing while the status menu
+        // is open, which is exactly when the user is staring at the AX hint.
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] timer in
             Task { @MainActor in
                 guard let self else { timer.invalidate(); return }
                 if DictationCoordinator.hasAccessibilityPermission() {
@@ -348,6 +369,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 }
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        axPollTimer = timer
     }
 
     @objc private func quit() {

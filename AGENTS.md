@@ -96,7 +96,7 @@ give.
 ## If something breaks
 
 - **Build fails** → read `/tmp/bark-build.log`. Most first-build failures are a
-  missing/oudated Xcode or a Swift Package fetch hiccup (re-run install.sh).
+  missing/outdated Xcode or a Swift Package fetch hiccup (re-run install.sh).
 - **Hotkey does nothing** → Accessibility grant missing or, after a rebuild,
   stale. Re-grant in System Settings, or use the "Bark Dev" cert to stop that.
 - **Transcription hangs / app pegs a CPU core** → the Neural Engine path

@@ -110,9 +110,13 @@ final class AudioRecorder {
             try installCapture()
         } catch {
             if let fallback = AudioDeviceCatalog.defaultInputID(), fallback != currentDeviceID {
-                try? setInputDevice(fallback)
-                currentDeviceID = fallback
-                try? installCapture()
+                do {
+                    try setInputDevice(fallback)
+                    currentDeviceID = fallback  // only after the bind succeeded
+                    try installCapture()
+                } catch {
+                    log.error("Fallback capture rebuild failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
             if !engine.isRunning {
                 log.error("Capture rebuild failed: \(error.localizedDescription, privacy: .public)")

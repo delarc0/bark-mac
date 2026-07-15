@@ -101,6 +101,10 @@ actor Transcriber {
     /// pipeline, so every later launch (including Finder ones, where
     /// BARK_CPU_ONLY can't reach) starts on the working path.
     func warmupSelfHealing() async {
+        // Load is NOT under the wedge timeout: a first-run 1.5GB download or a
+        // slow CoreML compile can legitimately take minutes, and a false
+        // positive here would permanently downgrade a healthy machine to CPU.
+        do { try await load() } catch { return }  // load errors surface via state
         // Healthy warmup is 1-8s measured (M1 CPU path through M5 Pro ANE).
         // The model is already compiled by load(); warmup never legitimately
         // takes 30s — but a wedge holds this forever.
@@ -116,6 +120,7 @@ actor Transcriber {
         pipeline = nil
         loadTask = nil
         setState(.unloaded)
+        do { try await load() } catch { return }
         if await warmupCompleted(within: 120) {
             log.info("Self-heal succeeded — running on CPU+GPU")
         } else {
@@ -124,12 +129,14 @@ actor Transcriber {
     }
 
     private func warmupCompleted(within seconds: TimeInterval) async -> Bool {
-        let work = Task { [weak self] in
+        // All racing tasks are detached: Task {} here would inherit this actor's
+        // executor, and a wedge that spins ON the actor would starve the very
+        // timeout meant to detect it.
+        let work = Task.detached { [weak self] in
             guard let self else { return }
-            try await self.load()
             _ = try await self.transcribe(samples: [Float](repeating: 0, count: 48000), language: "en")
         }
-        let timeout = Task {
+        let timeout = Task.detached {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             return
         }
@@ -146,7 +153,7 @@ actor Transcriber {
                     cont.resume(returning: value)
                 }
             }
-            Task {
+            Task.detached {
                 do {
                     try await work.value
                     resumeOnce(true)
@@ -154,7 +161,7 @@ actor Transcriber {
                     resumeOnce(true)  // errored ≠ wedged; load()/transcribe() surface errors themselves
                 }
             }
-            Task {
+            Task.detached {
                 await timeout.value
                 resumeOnce(false)
             }

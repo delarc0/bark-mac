@@ -11,7 +11,7 @@ final class SettingsWindowController: NSWindowController {
         window.title = "Bark Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 560, height: 360))
+        window.setContentSize(NSSize(width: 560, height: 380))
         window.center()
         super.init(window: window)
 

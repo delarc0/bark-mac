@@ -43,8 +43,13 @@ echo "==> Generating a self-signed code-signing certificate"
 openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
   -keyout "$TMP/bark.key" -out "$TMP/bark.crt" -config "$TMP/bark.cnf" >/dev/null 2>&1
 
-# -legacy: macOS Security can't verify the MAC on OpenSSL 3's default PKCS#12.
-openssl pkcs12 -export -legacy -out "$TMP/bark.p12" \
+# OpenSSL 3.x needs -legacy so macOS Security can verify the PKCS#12 MAC;
+# stock macOS ships LibreSSL, which neither has nor needs the flag.
+LEGACY_FLAG=""
+if openssl version 2>/dev/null | grep -q "^OpenSSL 3"; then
+  LEGACY_FLAG="-legacy"
+fi
+openssl pkcs12 -export $LEGACY_FLAG -out "$TMP/bark.p12" \
   -inkey "$TMP/bark.key" -in "$TMP/bark.crt" -passout pass: >/dev/null 2>&1
 
 echo "==> Importing into your login keychain"

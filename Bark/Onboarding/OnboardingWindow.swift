@@ -25,6 +25,20 @@ final class OnboardingWindowController: NSWindowController {
             onFinish: { [weak self] in self?.finish() }
         )
         window.contentViewController = NSHostingController(rootView: root)
+
+        // Same policy-restore as SettingsWindow: closing via the title-bar
+        // button must not leave Bark as a permanent Dock app.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                if !(NSApp.windows.contains { $0.isVisible && $0 !== window && $0.canBecomeKey }) {
+                    NSApp.setActivationPolicy(.accessory)
+                }
+            }
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -40,6 +54,7 @@ final class OnboardingWindowController: NSWindowController {
     private func finish() {
         AppSettings.shared.onboardingCompleted = true
         close()
-        NSApp.setActivationPolicy(.accessory)
+        // close() already triggers the willClose policy restore, which keeps the
+        // Dock icon when another window (e.g. Settings) is still visible.
     }
 }
