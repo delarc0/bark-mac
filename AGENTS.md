@@ -98,7 +98,12 @@ give.
 - **Build fails** → read `/tmp/bark-build.log`. Most first-build failures are a
   missing/outdated Xcode or a Swift Package fetch hiccup (re-run install.sh).
 - **Hotkey does nothing** → Accessibility grant missing or, after a rebuild,
-  stale. Re-grant in System Settings, or use the "Bark Dev" cert to stop that.
+  stale (every ad-hoc rebuild re-signs, and macOS silently wipes TCC grants —
+  the System Settings toggle can show "on" while being dead). Bark detects the
+  loss at launch and re-opens the permission screen. If the toggle won't take:
+  quit Bark, run `tccutil reset Accessibility se.lab37.bark.mac`, relaunch, and
+  re-add Bark in System Settings → Privacy & Security → Accessibility. The
+  "Bark Dev" cert avoids all of this by keeping the signature stable.
 - **Transcription hangs / app pegs a CPU core** → the Neural Engine path
   wedges on some chips (confirmed M1 and M2 Max). Bark detects this at launch
   and switches itself to CPU+GPU automatically. If it's still stuck: quit Bark,

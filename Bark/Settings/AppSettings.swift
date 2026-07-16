@@ -26,6 +26,8 @@ final class AppSettings: ObservableObject {
         static let cleanupEnabled = "text.cleanup"
         static let vocabulary = "text.vocabulary"
         static let streamingEnabled = "transcription.streaming"
+        static let axWasGranted = "permissions.ax.wasGranted"
+        static let micWasGranted = "permissions.mic.wasGranted"
     }
 
     @Published var hotkeyKeyCode: CGKeyCode {
@@ -164,6 +166,17 @@ final class AppSettings: ObservableObject {
         }
         self.streamingEnabled = (defaults.object(forKey: Key.streamingEnabled) as? Bool) ?? false
         self.computeCpuOnly = defaults.bool(forKey: barkCpuOnlyDefaultsKey)
+    }
+
+    // Not @Published: bookkeeping for lost-grant detection, not UI state.
+    var axWasGranted: Bool {
+        get { defaults.bool(forKey: Key.axWasGranted) }
+        set { defaults.set(newValue, forKey: Key.axWasGranted) }
+    }
+
+    var micWasGranted: Bool {
+        get { defaults.bool(forKey: Key.micWasGranted) }
+        set { defaults.set(newValue, forKey: Key.micWasGranted) }
     }
 
     private func notify() {

@@ -45,7 +45,8 @@ final class OnboardingWindowController: NSWindowController {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func present() {
+    func present(at step: OnboardingModel.Step = .welcome) {
+        model.step = step
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)

@@ -91,6 +91,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             DispatchQueue.main.async {
                 OnboardingWindowController.shared.present()
             }
+        } else {
+            presentPermissionRecoveryIfNeeded()
         }
 
         Task.detached { [transcriber, log, weak self] in
@@ -123,9 +125,34 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// A rebuild re-signs the ad-hoc bundle, so macOS silently wipes TCC grants
+    /// (the System Settings toggle can even still show "on" while being dead).
+    /// Without this, the app just sits there doing nothing after every update.
+    private func presentPermissionRecoveryIfNeeded() {
+        let axNow = DictationCoordinator.hasAccessibilityPermission()
+        let micNow = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        if axNow { settings.axWasGranted = true }
+        if micNow { settings.micWasGranted = true }
+
+        if !axNow && settings.axWasGranted {
+            log.warning("Accessibility grant lost since last run (update re-sign?) — showing recovery")
+            settings.axWasGranted = false
+            DispatchQueue.main.async {
+                OnboardingWindowController.shared.present(at: .accessibility)
+            }
+        } else if !micNow && settings.micWasGranted {
+            log.warning("Microphone grant lost since last run — showing recovery")
+            settings.micWasGranted = false
+            DispatchQueue.main.async {
+                OnboardingWindowController.shared.present(at: .mic)
+            }
+        }
+    }
+
     private func startHotkeyIfPossible(promptIfNeeded: Bool) {
         if DictationCoordinator.hasAccessibilityPermission(prompt: promptIfNeeded) {
             _ = dictation.start()
+            settings.axWasGranted = true
         } else {
             log.info("Accessibility permission not granted; hotkey disabled — polling for grant")
             startAXPolling()
@@ -359,6 +386,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 guard let self else { timer.invalidate(); return }
                 if DictationCoordinator.hasAccessibilityPermission() {
                     self.log.info("AX granted — arming hotkey tap")
+                    self.settings.axWasGranted = true
                     _ = self.dictation.start()
                     self.rebuildMenu()
                     timer.invalidate()

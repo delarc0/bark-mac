@@ -296,6 +296,9 @@ private struct AccessibilityStep: View {
             Text("Open System Settings, toggle Bark on in Privacy & Security → Accessibility. Development builds may need an app restart for the grant to register.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            Text("After an update the old entry can show as enabled but be dead. If the toggle doesn't take: remove Bark from the list with the minus button, then re-add it with plus.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
             statusRow
             Spacer()
         }
