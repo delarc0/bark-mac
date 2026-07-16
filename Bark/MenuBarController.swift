@@ -134,18 +134,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if axNow { settings.axWasGranted = true }
         if micNow { settings.micWasGranted = true }
 
-        if !axNow && settings.axWasGranted {
-            log.warning("Accessibility grant lost since last run (update re-sign?) — showing recovery")
-            settings.axWasGranted = false
-            DispatchQueue.main.async {
-                OnboardingWindowController.shared.present(at: .accessibility)
-            }
-        } else if !micNow && settings.micWasGranted {
-            log.warning("Microphone grant lost since last run — showing recovery")
-            settings.micWasGranted = false
-            DispatchQueue.main.async {
-                OnboardingWindowController.shared.present(at: .mic)
-            }
+        let axLost = !axNow && settings.axWasGranted
+        let micLost = !micNow && settings.micWasGranted
+        guard axLost || micLost else { return }
+        if axLost { settings.axWasGranted = false }
+        if micLost { settings.micWasGranted = false }
+        log.warning("Permission grant lost since last run (ax=\(axLost, privacy: .public) mic=\(micLost, privacy: .public)) — showing recovery")
+        // A re-sign wipes both at once. The mic step precedes the accessibility
+        // step, so starting at .mic walks the user through both in one pass.
+        let step: OnboardingModel.Step = micLost ? .mic : .accessibility
+        DispatchQueue.main.async {
+            OnboardingWindowController.shared.present(at: step)
         }
     }
 
