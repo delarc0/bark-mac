@@ -60,9 +60,9 @@ Fallback is `cpuAndGPU` for both models, reachable three ways:
 - [x] Phase 3 — CGEventTap hotkey (right-Option hold) + paste (NSPasteboard + synthesized ⌘V with clipboard save/restore) — validated end-to-end 2026-04-18
 - [x] Phase 4 — Overlay pill (NSPanel + SwiftUI) + Settings window (hotkey picker, model, language, audio device) — shipped 2026-04-18
 - [x] Phase 5a — Onboarding flow + Sparkle SDK wired (infra only; can't ship updates until Dev ID lands) — shipped 2026-04-18
-- [ ] Phase 5b — Dev ID signing + notarization + live appcast. **Unblocked 2026-07-16**: Apple Developer Program LIVE (LAB37 Media AB, Team ID `4D2U237VRC`). Pipeline fully scripted in `scripts/release.sh` (see `distribution/README.md`); waiting only on the one-time machine setup (Developer ID cert in keychain + `AC_NOTARY` notarytool profile — both need Erik's Apple ID interactively). `./scripts/release.sh --check` reports readiness; `./scripts/release.sh X.Y.Z --publish` cuts the release.
+- [x] Phase 5b — **SHIPPED 2026-07-17**: Bark 0.2.0 is the first signed + notarized release (Developer ID, LAB37 Media AB, Team ID `4D2U237VRC`). Live appcast at `delarc0.github.io/bark-mac/appcast.xml`; GitHub Release carries a drag-to-Applications DMG (human install) + zip (Sparkle enclosure). `./scripts/release.sh X.Y.Z --publish` cuts a release end to end; `--check` probes machine readiness. TCC grants now survive updates.
 
-**Resumed 2026-04-18** on M5 Pro 48 GB. Everything through Phase 5a has shipped; 5b is scripted and waiting on cert activation. Launch-at-login (SMAppService) shipped 2026-07-17.
+**All phases complete.** Launch-at-login (SMAppService) and model-download progress UX (menu/overlay/onboarding) landed on main after the 0.2.0 cut — they ship with the next release.
 
 ## Phase 3 shipped
 
