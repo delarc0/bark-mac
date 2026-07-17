@@ -93,6 +93,7 @@ preflight
 
 step "Version ${VERSION}"
 git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null && fail "tag v${VERSION} already exists"
+git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1 && fail "tag v${VERSION} already exists on origin"
 grep -q "Bark-${VERSION}.zip" distribution/appcast.xml && fail "appcast already has ${VERSION}"
 CUR_BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION: "\([0-9]*\)".*/\1/p' project.yml)
 [ -n "$CUR_BUILD" ] || fail "could not read CURRENT_PROJECT_VERSION from project.yml"
@@ -125,12 +126,20 @@ step "Notarize + staple"
 NZIP="build/Bark-${VERSION}-notarize.zip"
 rm -f "$NZIP"
 ditto -c -k --keepParent "$APP" "$NZIP"
-SUBMIT=$(xcrun notarytool submit "$NZIP" --keychain-profile "$PROFILE" --wait 2>&1) || true
-echo "$SUBMIT" | grep -E "^  (id|status):" | sort -u | sed 's/^/  /'
-if ! echo "$SUBMIT" | grep -q "status: Accepted"; then
-  SUB_ID=$(echo "$SUBMIT" | awk '/^  id:/ {print $2; exit}')
-  [ -n "$SUB_ID" ] && xcrun notarytool log "$SUB_ID" --keychain-profile "$PROFILE" || true
-  fail "notarization not accepted"
+SUBMIT=$(xcrun notarytool submit "$NZIP" --keychain-profile "$PROFILE" 2>&1) || { echo "$SUBMIT"; fail "notarytool submit failed"; }
+SUB_ID=$(echo "$SUBMIT" | awk '/^  id:/ {print $2; exit}')
+[ -n "$SUB_ID" ] || { echo "$SUBMIT"; fail "no submission id in notarytool output"; }
+bold "submitted ${SUB_ID}, waiting (a team's first submission can take up to an hour)"
+# wait dies on transient network loss; the submission keeps processing server-side
+for attempt in $(seq 1 40); do
+  xcrun notarytool wait "$SUB_ID" --keychain-profile "$PROFILE" && break
+  echo "  wait dropped (attempt ${attempt}, likely a network blip), retrying in 30s"
+  sleep 30
+done
+STATUS=$(xcrun notarytool info "$SUB_ID" --keychain-profile "$PROFILE" 2>&1 | awk '/status:/ {print $2; exit}')
+if [ "$STATUS" != "Accepted" ]; then
+  xcrun notarytool log "$SUB_ID" --keychain-profile "$PROFILE" || true
+  fail "notarization status: ${STATUS:-unknown}"
 fi
 xcrun stapler staple "$APP" >/dev/null
 rm -f "$NZIP"
@@ -193,6 +202,7 @@ fi
 step "Publish: commit release to main"
 git add project.yml distribution/appcast.xml
 git commit -m "Release ${VERSION}"
+trap 'printf "\033[1;31mPUBLISH INCOMPLETE:\033[0m the release commit exists (check origin/main, the GH release, and gh-pages to see how far it got). Finish the remaining steps manually per distribution/README.md.\n" >&2' ERR
 git push origin main
 bold "pushed release commit"
 
@@ -205,17 +215,20 @@ step "Publish: appcast to gh-pages"
 WT="build/ghpages-wt"
 rm -rf "$WT"
 git worktree prune
+# Detached checkout of the remote tip: immune to a stale local gh-pages branch
+# and to the branch being checked out in some other worktree.
 if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
-  git fetch origin gh-pages:gh-pages 2>/dev/null || true
-  git worktree add "$WT" gh-pages
+  git fetch origin gh-pages || fail "could not fetch origin/gh-pages"
+  git worktree add --detach "$WT" FETCH_HEAD
 else
-  git worktree add --orphan gh-pages "$WT"
+  git worktree list | grep -q " \[gh-pages\]" && fail "local gh-pages branch is checked out in another worktree (git worktree list)"
+  git worktree add --orphan -b gh-pages "$WT"
 fi
 cp distribution/appcast.xml "$WT/appcast.xml"
 touch "$WT/.nojekyll"
 git -C "$WT" add appcast.xml .nojekyll
 git -C "$WT" commit -m "appcast: Bark ${VERSION}" >/dev/null
-git -C "$WT" push origin gh-pages
+git -C "$WT" push origin HEAD:refs/heads/gh-pages
 git worktree remove --force "$WT"
 gh api "repos/${REPO}/pages" >/dev/null 2>&1 || \
   gh api "repos/${REPO}/pages" -X POST -f "source[branch]=gh-pages" -f "source[path]=/" >/dev/null

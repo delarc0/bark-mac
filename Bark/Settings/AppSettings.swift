@@ -147,6 +147,8 @@ final class AppSettings: ObservableObject {
 
     // Truth lives in SMAppService, not UserDefaults. On failure the assignment
     // reverts to the actual registration state; the guard stops the recursion.
+    // .requiresApproval (registered, but user disabled it in System Settings)
+    // can't be resolved by register() alone, so surface the Login Items pane.
     @Published var launchAtLogin: Bool {
         didSet {
             let actual = SMAppService.mainApp.status == .enabled
@@ -154,12 +156,18 @@ final class AppSettings: ObservableObject {
             do {
                 if launchAtLogin {
                     try SMAppService.mainApp.register()
+                    if SMAppService.mainApp.status == .requiresApproval {
+                        SMAppService.openSystemSettingsLoginItems()
+                    }
                 } else {
                     try SMAppService.mainApp.unregister()
                 }
                 notify()
             } catch {
                 log.error("launch-at-login \(self.launchAtLogin ? "register" : "unregister", privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                if launchAtLogin, SMAppService.mainApp.status == .requiresApproval {
+                    SMAppService.openSystemSettingsLoginItems()
+                }
                 launchAtLogin = actual
             }
         }
