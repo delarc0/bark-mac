@@ -42,9 +42,15 @@ That does, in order: preflight → bump `MARKETING_VERSION` +
 `CURRENT_PROJECT_VERSION` in `project.yml` → archive Release → export with
 Developer ID (`ExportOptions.plist`) → notarize (`AC_NOTARY`, waits) → staple →
 verify (codesign strict, hardened-runtime flag, **audio-input entitlement**,
-staple, Gatekeeper) → `ditto` zip → Sparkle `sign_update` → append `<item>` to
-`appcast.xml` → commit + push to main → GitHub Release with the zip →
-push appcast to `gh-pages`.
+staple, Gatekeeper) → build + notarize a drag-to-Applications **DMG** →
+`ditto` zip → Sparkle `sign_update` → append `<item>` to `appcast.xml` →
+commit + push to main → GitHub Release with DMG + zip → push appcast to
+`gh-pages`.
+
+Two artifacts per release: the **DMG** is the human download (drag to
+Applications sidesteps App Translocation, which breaks Sparkle updates for
+apps run from ~/Downloads); the **zip** is what Sparkle pulls for updates
+(the appcast enclosure points at it).
 
 Without `--publish` it stops after local verification and pushes nothing
 (dry run; reset with `git checkout -- project.yml distribution/appcast.xml`).

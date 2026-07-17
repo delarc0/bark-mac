@@ -122,25 +122,31 @@ APP="build/export/Bark.app"
 [ -d "$APP" ] || fail "export produced no app"
 bold "exported and re-signed with Developer ID"
 
+# Submit a file and wait until Apple accepts it. `wait` dies on transient
+# network loss while the submission keeps processing server-side, so retry it.
+notarize() {
+  local submit sub_id status
+  submit=$(xcrun notarytool submit "$1" --keychain-profile "$PROFILE" 2>&1) || { echo "$submit"; fail "notarytool submit failed for $1"; }
+  sub_id=$(echo "$submit" | awk '/^  id:/ {print $2; exit}')
+  [ -n "$sub_id" ] || { echo "$submit"; fail "no submission id in notarytool output"; }
+  bold "submitted ${sub_id} ($1), waiting (a team's first submissions can take up to an hour)"
+  for attempt in $(seq 1 40); do
+    xcrun notarytool wait "$sub_id" --keychain-profile "$PROFILE" && break
+    echo "  wait dropped (attempt ${attempt}, likely a network blip), retrying in 30s"
+    sleep 30
+  done
+  status=$(xcrun notarytool info "$sub_id" --keychain-profile "$PROFILE" 2>&1 | awk '/status:/ {print $2; exit}')
+  if [ "$status" != "Accepted" ]; then
+    xcrun notarytool log "$sub_id" --keychain-profile "$PROFILE" || true
+    fail "notarization status: ${status:-unknown} ($1)"
+  fi
+}
+
 step "Notarize + staple"
 NZIP="build/Bark-${VERSION}-notarize.zip"
 rm -f "$NZIP"
 ditto -c -k --keepParent "$APP" "$NZIP"
-SUBMIT=$(xcrun notarytool submit "$NZIP" --keychain-profile "$PROFILE" 2>&1) || { echo "$SUBMIT"; fail "notarytool submit failed"; }
-SUB_ID=$(echo "$SUBMIT" | awk '/^  id:/ {print $2; exit}')
-[ -n "$SUB_ID" ] || { echo "$SUBMIT"; fail "no submission id in notarytool output"; }
-bold "submitted ${SUB_ID}, waiting (a team's first submission can take up to an hour)"
-# wait dies on transient network loss; the submission keeps processing server-side
-for attempt in $(seq 1 40); do
-  xcrun notarytool wait "$SUB_ID" --keychain-profile "$PROFILE" && break
-  echo "  wait dropped (attempt ${attempt}, likely a network blip), retrying in 30s"
-  sleep 30
-done
-STATUS=$(xcrun notarytool info "$SUB_ID" --keychain-profile "$PROFILE" 2>&1 | awk '/status:/ {print $2; exit}')
-if [ "$STATUS" != "Accepted" ]; then
-  xcrun notarytool log "$SUB_ID" --keychain-profile "$PROFILE" || true
-  fail "notarization status: ${STATUS:-unknown}"
-fi
+notarize "$NZIP"
 xcrun stapler staple "$APP" >/dev/null
 rm -f "$NZIP"
 bold "notarized and stapled"
@@ -152,6 +158,22 @@ codesign -d --entitlements - "$APP" 2>/dev/null | grep -q "audio-input" || fail 
 xcrun stapler validate "$APP" >/dev/null || fail "staple didn't validate"
 spctl --assess --type execute -vv "$APP" 2>&1 | grep -q "Notarized Developer ID" || fail "Gatekeeper assessment failed"
 bold "signed, notarized, stapled, mic entitlement intact"
+
+step "DMG (drag-to-Applications, the human download)"
+DMG="build/Bark-${VERSION}.dmg"
+DMG_ROOT="build/dmg-root"
+rm -f "$DMG"
+rm -rf "$DMG_ROOT"
+mkdir -p "$DMG_ROOT"
+ditto "$APP" "$DMG_ROOT/Bark.app"
+ln -s /Applications "$DMG_ROOT/Applications"
+hdiutil create -volname "Bark" -srcfolder "$DMG_ROOT" -ov -format UDZO -quiet "$DMG"
+rm -rf "$DMG_ROOT"
+codesign --force --sign "Developer ID Application" --timestamp "$DMG"
+notarize "$DMG"
+xcrun stapler staple "$DMG" >/dev/null
+xcrun stapler validate "$DMG" >/dev/null || fail "DMG staple didn't validate"
+bold "DMG built, signed, notarized, stapled"
 
 step "Sparkle-sign"
 ZIP="build/Bark-${VERSION}.zip"
@@ -207,8 +229,10 @@ git push origin main
 bold "pushed release commit"
 
 step "Publish: GitHub Release"
-[ -n "$NOTES" ] || NOTES="Bark ${VERSION} - signed and notarized (Developer ID). Existing installs update via the menu bar."
-gh release create "v${VERSION}" "$ZIP" --repo "$REPO" --title "Bark ${VERSION}" --notes "$NOTES"
+[ -n "$NOTES" ] || NOTES="Bark ${VERSION} - signed and notarized (Developer ID).
+
+**Install:** download \`Bark-${VERSION}.dmg\`, drag Bark to Applications, open. Existing installs update from the menu bar instead."
+gh release create "v${VERSION}" "$DMG" "$ZIP" --repo "$REPO" --title "Bark ${VERSION}" --notes "$NOTES"
 bold "release v${VERSION} live"
 
 step "Publish: appcast to gh-pages"
