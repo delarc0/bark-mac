@@ -68,8 +68,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: se.lab37.bark.mac
         PRODUCT_NAME: Bark
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "2"
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_ENTITLEMENTS: Bark/Bark.entitlements
         ENABLE_APP_SANDBOX: NO
