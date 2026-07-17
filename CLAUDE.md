@@ -49,7 +49,7 @@ Fallback is `cpuAndGPU` for both models, reachable three ways:
 ## Conventions
 
 - **No code comments** unless genuinely non-obvious (a hidden invariant, a workaround for a specific bug). Don't narrate what the code does.
-- **Signing (until Apple Developer ID lands):** `project.yml` compiles ad-hoc (`CODE_SIGN_IDENTITY: "-"`) so a clean checkout builds on any Mac and the SPM dependency targets never demand a development team. The post-build phase deep-re-signs the bundle to unify nested-dylib Team IDs and, when `install.sh` passes `BARK_SIGN_IDENTITY="Bark Dev"` (the optional self-signed cert from `scripts/create-signing-cert.sh`), upgrades to it so TCC grants survive rebuilds. Never pass `CODE_SIGN_IDENTITY="Bark Dev"` on the xcodebuild CLI — it leaks to the SPM targets and fails the build; the identity is applied only by the post-build re-sign. Ad-hoc builds still reset permissions on each rebuild; no SMAppService login items until Dev ID.
+- **Signing (until Apple Developer ID lands):** `project.yml` compiles ad-hoc (`CODE_SIGN_IDENTITY: "-"`) so a clean checkout builds on any Mac and the SPM dependency targets never demand a development team. The post-build phase deep-re-signs the bundle to unify nested-dylib Team IDs and, when `install.sh` passes `BARK_SIGN_IDENTITY="Bark Dev"` (the optional self-signed cert from `scripts/create-signing-cert.sh`), upgrades to it so TCC grants survive rebuilds. Never pass `CODE_SIGN_IDENTITY="Bark Dev"` on the xcodebuild CLI — it leaks to the SPM targets and fails the build; the identity is applied only by the post-build re-sign. Ad-hoc builds still reset permissions on each rebuild. Release builds are different: the archive stays ad-hoc and `xcodebuild -exportArchive` re-signs with the Developer ID cert per `distribution/ExportOptions.plist` (the Debug-only post-build re-sign is guarded on `${CONFIGURATION}` so it can't interfere).
 - UserDefaults for settings, not migrated from Python Bark's `bark_config.json`. Clean slate.
 
 ## Roadmap status (2026-04-18)
@@ -60,9 +60,9 @@ Fallback is `cpuAndGPU` for both models, reachable three ways:
 - [x] Phase 3 — CGEventTap hotkey (right-Option hold) + paste (NSPasteboard + synthesized ⌘V with clipboard save/restore) — validated end-to-end 2026-04-18
 - [x] Phase 4 — Overlay pill (NSPanel + SwiftUI) + Settings window (hotkey picker, model, language, audio device) — shipped 2026-04-18
 - [x] Phase 5a — Onboarding flow + Sparkle SDK wired (infra only; can't ship updates until Dev ID lands) — shipped 2026-04-18
-- [ ] Phase 5b — Dev ID signing + notarization + live appcast (blocked on Apple Developer ID approval)
+- [ ] Phase 5b — Dev ID signing + notarization + live appcast. **Unblocked 2026-07-16**: Apple Developer Program LIVE (LAB37 Media AB, Team ID `4D2U237VRC`). Pipeline fully scripted in `scripts/release.sh` (see `distribution/README.md`); waiting only on the one-time machine setup (Developer ID cert in keychain + `AC_NOTARY` notarytool profile — both need Erik's Apple ID interactively). `./scripts/release.sh --check` reports readiness; `./scripts/release.sh X.Y.Z --publish` cuts the release.
 
-**Resumed 2026-04-18** on M5 Pro 48 GB. Everything through Phase 5a has shipped; 5b (Dev ID) is the open item.
+**Resumed 2026-04-18** on M5 Pro 48 GB. Everything through Phase 5a has shipped; 5b is scripted and waiting on cert activation. Launch-at-login (SMAppService) shipped 2026-07-17.
 
 ## Phase 3 shipped
 
@@ -88,7 +88,7 @@ Fallback is `cpuAndGPU` for both models, reachable three ways:
 - **AppSettings** — UserDefaults-backed `ObservableObject` singleton. Persists hotkey (keyCode + mask + display name), model variant, language, input device UID. Posts `AppSettings.didChange` on any mutation; `MenuBarController` listens and restarts the hotkey tap so new mappings take effect immediately.
 - **Input device persistence** — selection is now stored by device UID (stable across reboots/reconnects), not the ephemeral `AudioDeviceID`. `AudioDeviceCatalog.inputID(matching:)` resolves on each start.
 - **Model / language** — selectable in Settings → Model. Takes effect on next launch (Transcriber is init'd once at MenuBarController construction).
-- **Launch-at-login** — deferred to Phase 5. Needs `SMAppService`, which needs Dev ID.
+- **Launch-at-login** — shipped 2026-07-17. `SMAppService.mainApp` register/unregister behind `AppSettings.launchAtLogin`; truth lives in `SMAppService.status`, not UserDefaults, and the General tab re-reads it on appear (user can flip it in System Settings → Login Items too). Works on dev-signed builds; Dev ID was never actually required for main-app login items.
 
 ## Bench
 
@@ -120,7 +120,9 @@ Fallback is `cpuAndGPU` for both models, reachable three ways:
 - `Bark/Onboarding/OnboardingView.swift` — 4-step SwiftUI flow (welcome/mic/ax/hotkey/done)
 - `Bark/Onboarding/OnboardingWindow.swift` — `OnboardingWindowController.shared`, sets `onboardingCompleted` on finish
 - `Bark/Updates/UpdaterController.swift` — `SPUStandardUpdaterController` wrapper; menu target for "Check for Updates…"
-- `distribution/appcast.xml` + `distribution/README.md` — release pipeline scaffolding (dormant until Dev ID)
+- `scripts/release.sh` — the whole release: preflight → bump → archive → Dev ID export → notarize → staple → verify → Sparkle-sign → appcast → GH Release + gh-pages. `--check` = readiness probe
+- `distribution/ExportOptions.plist` — developer-id export, Team `4D2U237VRC`
+- `distribution/appcast.xml` + `distribution/README.md` — update feed source of truth + release runbook
 - `Bark/Bark.entitlements` — (sandbox disabled during dev)
 - `Bark/Info.plist` — generated by xcodegen (gitignored); holds `SUFeedURL`, `SUPublicEDKey`, all `NS*`/`LS*`/`CF*` keys
 

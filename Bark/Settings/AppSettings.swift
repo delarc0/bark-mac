@@ -2,10 +2,14 @@ import AppKit
 import Carbon.HIToolbox
 import Combine
 import Foundation
+import ServiceManagement
+import os
 
 @MainActor
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
+
+    private let log = Logger(subsystem: "se.lab37.bark.mac", category: "Settings")
 
     // Notification posted whenever any stored setting changes (keyCode/flagMask/displayName/model).
     static let didChange = Notification.Name("se.lab37.bark.mac.AppSettings.didChange")
@@ -141,6 +145,33 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    // Truth lives in SMAppService, not UserDefaults. On failure the assignment
+    // reverts to the actual registration state; the guard stops the recursion.
+    @Published var launchAtLogin: Bool {
+        didSet {
+            let actual = SMAppService.mainApp.status == .enabled
+            guard launchAtLogin != actual else { return }
+            do {
+                if launchAtLogin {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+                notify()
+            } catch {
+                log.error("launch-at-login \(self.launchAtLogin ? "register" : "unregister", privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                launchAtLogin = actual
+            }
+        }
+    }
+
+    // The user can also flip this in System Settings → Login Items; re-read on
+    // Settings-window open so the toggle reflects reality.
+    func refreshLaunchAtLogin() {
+        let actual = SMAppService.mainApp.status == .enabled
+        if launchAtLogin != actual { launchAtLogin = actual }
+    }
+
     private init() {
         let storedKeyCode = defaults.object(forKey: Key.hotkeyKeyCode) as? Int
         self.hotkeyKeyCode = CGKeyCode(storedKeyCode ?? kVK_RightOption)
@@ -166,6 +197,7 @@ final class AppSettings: ObservableObject {
         }
         self.streamingEnabled = (defaults.object(forKey: Key.streamingEnabled) as? Bool) ?? false
         self.computeCpuOnly = defaults.bool(forKey: barkCpuOnlyDefaultsKey)
+        self.launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
     // Not @Published: bookkeeping for lost-grant detection, not UI state.

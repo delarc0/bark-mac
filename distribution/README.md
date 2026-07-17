@@ -1,48 +1,76 @@
 # Bark — distribution
 
-This folder holds the release pipeline scaffolding for Sparkle auto-update.
+Release pipeline for signed, notarized builds with Sparkle auto-update.
 
-## State (2026-04-18)
+## State (2026-07-17)
 
-- EdDSA keypair generated; public key lives in `project.yml` under `INFOPLIST_KEY_SUPublicEDKey`. Private key is in the macOS login keychain of the signing machine.
-- `appcast.xml` is a placeholder. Not yet hosted.
-- Apple Developer ID is **pending**. Until it's approved, we cannot ship real updates — Sparkle refuses to apply updates that aren't both EdDSA-signed and codesigned by a trusted identity.
+- Apple Developer Program: **LIVE**. LAB37 Media AB, Team ID `4D2U237VRC`.
+- EdDSA keypair generated; public key lives in `project.yml` (`SUPublicEDKey`).
+  Private key is in the login keychain of the release machine (Erik's M5 Pro).
+- The whole release is scripted: `scripts/release.sh`.
+- `appcast.xml` in this folder is the source of truth for the update feed. The
+  script appends each release and mirrors it to the `gh-pages` branch, served at
+  `https://delarc0.github.io/bark-mac/appcast.xml` (matches `SUFeedURL`).
+- Release zips live on GitHub Releases; the appcast enclosure URLs point there.
 
-## When Dev ID is approved
+## One-time machine setup
 
-Release recipe (run from `apps/bark-mac`):
+Both steps are interactive (Apple ID) and cannot be scripted:
+
+1. **Developer ID certificate** — Xcode → Settings → Accounts → sign in
+   `erik@lab37.io` → Manage Certificates → **+** → **Developer ID Application**.
+2. **Notary credentials** — create an App Store Connect API key (Users and
+   Access → Integrations, role Developer), then:
+   ```bash
+   xcrun notarytool store-credentials AC_NOTARY \
+     --key /path/to/AuthKey_XXXX.p8 --key-id XXXX --issuer <issuer-uuid>
+   ```
+
+Verify readiness any time:
 
 ```bash
-# 1. Bump version
-sed -i '' 's/MARKETING_VERSION: "0.1.0"/MARKETING_VERSION: "0.2.0"/' project.yml
-xcodegen
-
-# 2. Archive + export with Developer ID
-xcodebuild -project Bark.xcodeproj -scheme Bark -configuration Release \
-  -archivePath build/Bark.xcarchive archive
-xcodebuild -exportArchive -archivePath build/Bark.xcarchive \
-  -exportPath build/export -exportOptionsPlist distribution/ExportOptions.plist
-
-# 3. Notarize + staple
-xcrun notarytool submit build/export/Bark.app --keychain-profile "AC_NOTARY" --wait
-xcrun stapler staple build/export/Bark.app
-
-# 4. Zip + sign for Sparkle
-ditto -c -k --sequesterRsrc --keepParent build/export/Bark.app build/Bark-0.2.0.zip
-build/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update build/Bark-0.2.0.zip
-
-# 5. Update appcast.xml with the new <item>, push to GH Pages, upload zip to GH Release
+./scripts/release.sh --check
 ```
 
-## Hosting
+## Cutting a release
 
-Target: GitHub Pages from a `bark-mac-updates` branch or a separate repo, served at `delarc0.github.io/bark-mac/appcast.xml` (matches `SUFeedURL` in `project.yml`). Release zips live on GitHub Releases so they're cacheable without hammering Pages.
+```bash
+./scripts/release.sh 0.2.0 --publish
+```
+
+That does, in order: preflight → bump `MARKETING_VERSION` +
+`CURRENT_PROJECT_VERSION` in `project.yml` → archive Release → export with
+Developer ID (`ExportOptions.plist`) → notarize (`AC_NOTARY`, waits) → staple →
+verify (codesign strict, hardened-runtime flag, **audio-input entitlement**,
+staple, Gatekeeper) → `ditto` zip → Sparkle `sign_update` → append `<item>` to
+`appcast.xml` → commit + push to main → GitHub Release with the zip →
+push appcast to `gh-pages`.
+
+Without `--publish` it stops after local verification and pushes nothing
+(dry run; reset with `git checkout -- project.yml distribution/appcast.xml`).
+
+## Gotchas learned the hard way
+
+- **notarytool takes a zip, not a .app.** The script zips, submits, then
+  staples the .app and re-zips for distribution.
+- **The mic dies silently** in a hardened-runtime build without the
+  `com.apple.security.device.audio-input` entitlement. It's in
+  `Bark/Bark.entitlements`; the verify step fails the release if it's missing.
+- **Never pass `CODE_SIGN_IDENTITY` on the xcodebuild CLI** — it leaks into the
+  SPM package targets, which then demand a development team. The archive stays
+  ad-hoc; `-exportArchive` re-signs everything with the Developer ID cert per
+  `ExportOptions.plist`.
+- The Debug-only post-build deep re-sign in `project.yml` does not run for
+  Release archives (guarded on `${CONFIGURATION}`), so it can't fight the
+  export signing.
 
 ## Key management
 
-- Public key is committed in `project.yml` (safe — it's public by design).
-- Private key is in the login keychain on the release machine. Back it up with:
+- Public key is committed in `project.yml` (safe, public by design).
+- Private key is in the login keychain of the release machine. Back it up with:
   ```bash
   build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys -x bark-sparkle-private.pem
   ```
-  Store the exported PEM in 1Password. Re-import on a new machine with `-f <file>`.
+  Store the exported PEM in 1Password. Re-import on a new machine with
+  `generate_keys -f <file>`. Losing this key means shipped installs can never
+  auto-update again (public key is baked into every released binary).

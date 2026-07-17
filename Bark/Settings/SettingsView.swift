@@ -81,15 +81,15 @@ private struct GeneralTab: View {
 
             HStack {
                 Text("Launch at login").frame(width: 140, alignment: .trailing)
-                Text("Requires signed build (coming in Phase 5)")
-                    .foregroundStyle(.secondary)
-                    .font(.system(size: 12))
+                Toggle("Start Bark when you log in", isOn: $settings.launchAtLogin)
+                    .toggleStyle(.switch)
                 Spacer()
             }
 
             Spacer()
         }
         .padding(.top, 4)
+        .onAppear { settings.refreshLaunchAtLogin() }
     }
 
     private func row(_ label: String, _ value: String) -> some View {
