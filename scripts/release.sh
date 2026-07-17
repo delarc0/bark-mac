@@ -153,10 +153,10 @@ bold "notarized and stapled"
 
 step "Verify"
 codesign --verify --deep --strict "$APP" || fail "codesign verify failed"
-codesign -d --verbose=2 "$APP" 2>&1 | grep -q "flags=.*runtime" || fail "hardened runtime flag missing"
-codesign -d --entitlements - "$APP" 2>/dev/null | grep -q "audio-input" || fail "audio-input entitlement missing (mic would be dead in this build)"
+codesign -d --verbose=2 "$APP" 2>&1 | grep "flags=.*runtime" >/dev/null || fail "hardened runtime flag missing"
+codesign -d --entitlements - "$APP" 2>/dev/null | grep "audio-input" >/dev/null || fail "audio-input entitlement missing (mic would be dead in this build)"
 xcrun stapler validate "$APP" >/dev/null || fail "staple didn't validate"
-spctl --assess --type execute -vv "$APP" 2>&1 | grep -q "Notarized Developer ID" || fail "Gatekeeper assessment failed"
+spctl --assess --type execute -vv "$APP" 2>&1 | grep "Notarized Developer ID" >/dev/null || fail "Gatekeeper assessment failed"
 bold "signed, notarized, stapled, mic entitlement intact"
 
 step "DMG (drag-to-Applications, the human download)"

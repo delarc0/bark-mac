@@ -4,10 +4,11 @@ import Combine
 
 @MainActor
 final class OverlayModel: ObservableObject {
-    enum State {
+    enum State: Equatable {
         case idle
         case recording
         case transcribing
+        case downloading(Double)
     }
 
     @Published var state: State = .idle
@@ -30,7 +31,9 @@ final class OverlayController {
     private var hideGeneration = 0
 
     init() {
-        let rect = NSRect(x: 0, y: 0, width: 140, height: 48)
+        // Wide enough for the "Downloading voice model… 99%" pill; the panel is
+        // transparent so unused width is invisible and the capsule stays centered.
+        let rect = NSRect(x: 0, y: 0, width: 380, height: 48)
         let panel = NSPanel(
             contentRect: rect,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -61,10 +64,10 @@ final class OverlayController {
         switch state {
         case .recording:
             startVoicePolling()
-        case .transcribing:
+        case .transcribing, .downloading:
             stopVoicePolling()
             if settings.overlayEnabled {
-                model.state = .transcribing
+                model.state = state
                 revealPanel()
             }
         case .idle:

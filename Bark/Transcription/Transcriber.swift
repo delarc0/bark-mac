@@ -11,6 +11,7 @@ actor Transcriber {
     enum State: Sendable {
         case unloaded
         case loading
+        case downloading(Double)
         case ready
         case failed(String)
     }
@@ -63,14 +64,20 @@ actor Transcriber {
         log.info("Loading WhisperKit model '\(self.modelVariant, privacy: .public)'...")
         let task = Task { () throws in
             do {
-                let config = WhisperKitConfig(model: modelVariant,
-                                              computeOptions: Self.resolvedCompute(),
-                                              verbose: false,
-                                              logLevel: .error)
-                let kit = try await WhisperKit(config)
-                pipeline = kit
-                setState(.ready)
-                log.info("WhisperKit ready.")
+                // Cached model: skip the Hub round-trip (keeps relaunches
+                // working offline). A folder that exists but fails to load
+                // (interrupted download) falls through to a repair download.
+                if let local = Self.localModelFolder(for: modelVariant) {
+                    do {
+                        try await buildPipeline(modelFolder: local.path)
+                        return
+                    } catch {
+                        log.error("Cached model failed to load (\(error.localizedDescription, privacy: .public)) — re-fetching")
+                    }
+                }
+                let folder = try await downloadModel()
+                setState(.loading)
+                try await buildPipeline(modelFolder: folder.path)
             } catch {
                 setState(.failed(error.localizedDescription))
                 log.error("WhisperKit load failed: \(error.localizedDescription, privacy: .public)")
@@ -80,6 +87,56 @@ actor Transcriber {
         loadTask = task
         defer { loadTask = nil }
         try await task.value
+    }
+
+    private func buildPipeline(modelFolder: String) async throws {
+        let config = WhisperKitConfig(model: modelVariant,
+                                      modelFolder: modelFolder,
+                                      computeOptions: Self.resolvedCompute(),
+                                      verbose: false,
+                                      logLevel: .error,
+                                      download: false)
+        let kit = try await WhisperKit(config)
+        pipeline = kit
+        setState(.ready)
+        log.info("WhisperKit ready.")
+    }
+
+    private func downloadModel() async throws -> URL {
+        log.info("Downloading model '\(self.modelVariant, privacy: .public)'...")
+        // Progress fires on a URLSession queue; throttle to whole-percent
+        // steps before hopping onto the actor.
+        let lastReported = OSAllocatedUnfairLock(initialState: -1.0)
+        return try await WhisperKit.download(variant: modelVariant) { [weak self] progress in
+            let fraction = progress.fractionCompleted
+            let report = lastReported.withLock { (last: inout Double) -> Bool in
+                guard fraction - last >= 0.01 else { return false }
+                last = fraction
+                return true
+            }
+            guard report, let self else { return }
+            Task { await self.noteDownloadProgress(fraction) }
+        }
+    }
+
+    private var lastLoggedDecile = -1
+
+    private func noteDownloadProgress(_ fraction: Double) {
+        if case .ready = state { return }
+        let decile = Int(fraction * 10)
+        if decile > lastLoggedDecile {
+            lastLoggedDecile = decile
+            log.info("Model download \(decile * 10, privacy: .public)%")
+        }
+        setState(.downloading(fraction))
+    }
+
+    private static func localModelFolder(for variant: String) -> URL? {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        let folder = docs.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/\(variant)")
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: folder.path),
+              contents.contains(where: { $0.hasSuffix(".mlmodelc") }) else { return nil }
+        return folder
     }
 
     func warmup() async {

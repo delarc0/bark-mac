@@ -45,7 +45,7 @@ struct OverlayView: View {
     private var accent: Color {
         switch model.state {
         case .recording: return accentGreen
-        case .transcribing: return BarkPalette.amber
+        case .transcribing, .downloading: return BarkPalette.amber
         case .idle: return accentGreen.opacity(0.5)
         }
     }
@@ -53,7 +53,7 @@ struct OverlayView: View {
     private var borderColor: Color {
         switch model.state {
         case .recording: return accentGreen.opacity(0.35)
-        case .transcribing: return BarkPalette.amber.opacity(0.25)
+        case .transcribing, .downloading: return BarkPalette.amber.opacity(0.25)
         case .idle: return (isDark ? Color.white : Color.black).opacity(0.06)
         }
     }
@@ -72,6 +72,13 @@ struct OverlayView: View {
             }
         case .transcribing:
             ThinkingDot()
+        case .downloading(let fraction):
+            HStack(spacing: 8) {
+                ThinkingDot()
+                Text("Downloading voice model… \(Int(fraction * 100))%")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle((isDark ? Color.white : Color.black).opacity(0.8))
+            }
         case .idle:
             EmptyView()
         }

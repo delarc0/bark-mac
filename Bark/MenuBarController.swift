@@ -99,7 +99,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             await transcriber.setStateObserver { [weak self] state in
                 Task { @MainActor [weak self] in
                     self?.modelState = state
+                    ModelStatus.shared.state = state
                     self?.rebuildMenu()
+                    self?.refreshOverlayForModelState()
                 }
             }
             let t0 = Date()
@@ -121,8 +123,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .recording:
             overlay.show(.recording)
         case .transcribing:
-            overlay.show(.transcribing)
+            overlay.show(overlayStateWhileTranscribing())
         }
+    }
+
+    // A dictation that lands before the model is on disk waits on the 1.5 GB
+    // download — show that in the pill instead of an indefinite spinner.
+    private func overlayStateWhileTranscribing() -> OverlayModel.State {
+        if case .downloading(let fraction) = modelState {
+            return .downloading(fraction)
+        }
+        return .transcribing
+    }
+
+    private func refreshOverlayForModelState() {
+        guard dictationState == .transcribing else { return }
+        overlay.show(overlayStateWhileTranscribing())
     }
 
     /// A rebuild re-signs the ad-hoc bundle, so macOS silently wipes TCC grants
@@ -260,6 +276,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         switch modelState {
         case .unloaded, .loading:
             let item = NSMenuItem(title: "Loading model…", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        case .downloading(let fraction):
+            let item = NSMenuItem(title: "Downloading voice model… \(Int(fraction * 100))%",
+                                  action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
         case .failed:

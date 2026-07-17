@@ -354,6 +354,8 @@ private struct HotkeyStep: View {
 }
 
 private struct DoneStep: View {
+    @ObservedObject private var modelStatus = ModelStatus.shared
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label("You're ready", systemImage: "sparkles")
@@ -361,11 +363,40 @@ private struct DoneStep: View {
                 .labelStyle(.titleAndIcon)
             Text("Bark lives in your menu bar. Click the icon any time to see settings, devices, and status.")
                 .foregroundStyle(.secondary)
-            Text("Tip: the first transcription may take a second while the model finishes warming up.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            modelStatusLine
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var modelStatusLine: some View {
+        switch modelStatus.state {
+        case .downloading(let fraction):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    ProgressView(value: fraction)
+                        .frame(width: 180)
+                    Text("\(Int(fraction * 100))%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                Text("Downloading the voice model (one time, ~1.5 GB). You can close this window — Bark is ready as soon as it finishes.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        case .unloaded, .loading:
+            Label("Preparing the voice model…", systemImage: "hourglass")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        case .ready:
+            Label("Voice model ready — try it now", systemImage: "checkmark.circle.fill")
+                .font(.callout)
+                .foregroundStyle(BarkPalette.neonGreen)
+        case .failed:
+            Label("Model download failed — check your connection, then use Retry in the menu bar", systemImage: "exclamationmark.triangle.fill")
+                .font(.callout)
+                .foregroundStyle(.orange)
+        }
     }
 }
