@@ -104,6 +104,9 @@ actor Transcriber {
 
     private func downloadModel() async throws -> URL {
         log.info("Downloading model '\(self.modelVariant, privacy: .public)'...")
+        downloadActive = true
+        lastLoggedDecile = -1
+        defer { downloadActive = false }
         // Progress fires on a URLSession queue; throttle to whole-percent
         // steps before hopping onto the actor.
         let lastReported = OSAllocatedUnfairLock(initialState: -1.0)
@@ -119,10 +122,13 @@ actor Transcriber {
         }
     }
 
+    // Progress hops are queued Tasks; ones that land after the download ended
+    // must not repaint .loading (compile phase) or .failed as "Downloading".
+    private var downloadActive = false
     private var lastLoggedDecile = -1
 
     private func noteDownloadProgress(_ fraction: Double) {
-        if case .ready = state { return }
+        guard downloadActive else { return }
         let decile = Int(fraction * 10)
         if decile > lastLoggedDecile {
             lastLoggedDecile = decile

@@ -169,7 +169,11 @@ ditto "$APP" "$DMG_ROOT/Bark.app"
 ln -s /Applications "$DMG_ROOT/Applications"
 hdiutil create -volname "Bark" -srcfolder "$DMG_ROOT" -ov -format UDZO -quiet "$DMG"
 rm -rf "$DMG_ROOT"
-codesign --force --sign "Developer ID Application" --timestamp "$DMG"
+# Sign by certificate hash: the bare name goes ambiguous the day a renewal
+# cert coexists with the old one in the keychain.
+CERT_HASH=$(security find-identity -v -p codesigning | grep "Developer ID Application: .*(${TEAM_ID})" | head -1 | awk '{print $2}')
+[ -n "$CERT_HASH" ] || fail "could not resolve Developer ID cert hash"
+codesign --force --sign "$CERT_HASH" --timestamp "$DMG"
 notarize "$DMG"
 xcrun stapler staple "$DMG" >/dev/null
 xcrun stapler validate "$DMG" >/dev/null || fail "DMG staple didn't validate"
