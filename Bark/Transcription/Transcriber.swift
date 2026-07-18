@@ -267,23 +267,36 @@ actor Transcriber {
 
     // Auto language, resolved with the (accurate) dedicated detection API and
     // pinned per dictation session so streaming chunks can't diverge into
-    // different languages. Low-confidence detections (sub-second chunks) are
-    // used for their own chunk but don't pin — a later, clearer chunk decides.
+    // different languages. Detections too weak to pin (sub-second chunks,
+    // low confidence) fall back to the last confident language — short quips
+    // are almost always in the language you last dictated in.
     private var autoLanguage: String?
+    private var lastConfidentLanguage: String?
+    private var sessionToken = 0
 
     func beginDictationSession() {
+        sessionToken += 1
         autoLanguage = nil
     }
 
     private func resolveAutoLanguage(for samples: [Float], pipeline: WhisperKit) async -> String? {
         if let autoLanguage { return autoLanguage }
-        guard let detection = try? await pipeline.detectLangauge(audioArray: samples) else { return nil }
+        let token = sessionToken
+        guard let detection = try? await pipeline.detectLangauge(audioArray: samples) else {
+            return lastConfidentLanguage
+        }
         let confidence = detection.langProbs[detection.language].map { exp(Double($0)) } ?? 0
         log.info("Auto language: '\(detection.language, privacy: .public)' confidence \(String(format: "%.2f", confidence), privacy: .public)")
-        // Pin only on confident detections over ≥1s of speech: a 0.3s slice
-        // measured "vi" at 0.54 confidence — confidence alone isn't enough.
-        if confidence >= 0.5, samples.count >= 16000 { autoLanguage = detection.language }
-        return detection.language
+        // Trust needs both gates: a 0.3s slice measured "vi" at 0.54
+        // confidence, so confidence alone isn't enough.
+        if confidence >= 0.5, samples.count >= 16000 {
+            lastConfidentLanguage = detection.language
+            // A session that began while this detection was in flight must not
+            // inherit the pin (its own audio may be a different language).
+            if token == sessionToken { autoLanguage = detection.language }
+            return detection.language
+        }
+        return lastConfidentLanguage ?? detection.language
     }
 
     /// Trim leading/trailing silence based on 10ms RMS frames. Keeps 100ms of head/tail
