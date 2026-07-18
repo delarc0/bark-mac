@@ -7,6 +7,18 @@
         <language>en</language>
 
         <item>
+            <title>Version 0.2.2</title>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>0.2.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <pubDate>Sat, 18 Jul 2026 14:17:03 +0000</pubDate>
+            <enclosure
+                url="https://github.com/delarc0/bark-mac/releases/download/v0.2.2/Bark-0.2.2.zip"
+                sparkle:edSignature="1wtXsJvRKT4Fnhv060wsVe16/+hWJQU2UNOwa9aocdxd0TOR9Gnnat0RTZjg8z6K5k8+/B1PTYO1ZwLNXCiIAw==" length="4516344"
+                type="application/octet-stream" />
+        </item>
+
+        <item>
             <title>Version 0.2.1</title>
             <sparkle:version>3</sparkle:version>
             <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
