@@ -31,9 +31,11 @@ final class OverlayController {
     private var hideGeneration = 0
 
     init() {
-        // Wide enough for the "Downloading voice model… 99%" pill; the panel is
-        // transparent so unused width is invisible and the capsule stays centered.
-        let rect = NSRect(x: 0, y: 0, width: 380, height: 48)
+        // Wide enough for the "Downloading voice model… 99%" pill, and tall
+        // enough for the drop shadow (radius 20, y+8) to fade out inside the
+        // panel — clipping it at the edge paints a hard-edged box around the
+        // pill. The panel is transparent, so the margin is invisible.
+        let rect = NSRect(x: 0, y: 0, width: 420, height: 150)
         let panel = NSPanel(
             contentRect: rect,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -164,7 +166,10 @@ final class OverlayController {
         guard let screen = targetScreen else { return }
         let visible = screen.visibleFrame
         let x = visible.midX - size.width / 2
-        let y = visible.minY + 80
+        // The pill is centered in the panel; anchor its center where the old
+        // 48pt panel put it (80pt origin + 24) so growing the panel for shadow
+        // room doesn't move the pill on screen.
+        let y = visible.minY + 104 - size.height / 2
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }
