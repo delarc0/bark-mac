@@ -303,6 +303,8 @@ final class DictationCoordinator {
                 vocabulary: settings.vocabulary
             )
             if !processed.isEmpty {
+                // Recorded before the paste so a fumbled paste is still recoverable.
+                TranscriptionHistory.shared.add(processed)
                 PasteService.pasteAtCursor(processed)
                 SoundService.shared.playDone()
             } else {

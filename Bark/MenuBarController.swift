@@ -227,8 +227,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // submenu never shows an unplugged mic or misses a fresh one.
     nonisolated func menuWillOpen(_ menu: NSMenu) {
         MainActor.assumeIsolated {
-            menuIsTracking = true
+            // Rebuild BEFORE raising the tracking flag — rebuildMenu() refuses
+            // to run while tracking, so the old order made this a no-op and the
+            // menu always showed last-closed state (stale devices, empty history).
             rebuildMenu()
+            menuIsTracking = true
         }
     }
 
@@ -294,6 +297,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         menu.addItem(.separator())
 
+        menu.addItem(recentTranscriptionsItem())
         menu.addItem(deviceMenuItem())
         menu.addItem(.separator())
         let settingsItem = NSMenuItem(title: "Settings…",
@@ -347,7 +351,39 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return parent
     }
 
+    private func recentTranscriptionsItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Copy Recent", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let entries = TranscriptionHistory.shared.entries
+        if entries.isEmpty {
+            let empty = NSMenuItem(title: "Nothing yet", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            submenu.addItem(empty)
+        } else {
+            for entry in entries {
+                let flat = entry.text.replacingOccurrences(of: "\n", with: " ")
+                let preview = flat.count > 48 ? String(flat.prefix(48)) + "…" : flat
+                let row = NSMenuItem(title: preview,
+                                     action: #selector(copyHistoryEntry(_:)),
+                                     keyEquivalent: "")
+                row.target = self
+                row.representedObject = entry.text
+                row.toolTip = entry.text
+                submenu.addItem(row)
+            }
+        }
+        item.submenu = submenu
+        return item
+    }
+
     // MARK: - Actions
+
+    @objc private func copyHistoryEntry(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
 
     @objc private func pickSystemDefault() {
         settings.inputDeviceUID = nil
