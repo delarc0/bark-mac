@@ -101,6 +101,7 @@ final class DictationCoordinator {
             chunkTasks = []
             sessionStreaming = AppSettings.shared.streamingEnabled
             sessionLanguage = AppSettings.shared.language
+            Task { await transcriber.beginDictationSession() }
             if sessionStreaming {
                 chunker.start()
             }

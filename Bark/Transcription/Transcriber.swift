@@ -238,6 +238,12 @@ actor Transcriber {
                           userInfo: [NSLocalizedDescriptionKey: "Pipeline not loaded"])
         }
 
+        let trimmed = Self.trimSilence(samples)
+        if trimmed.count < samples.count {
+            let savedSec = Double(samples.count - trimmed.count) / 16000.0
+            log.info("Trimmed \(savedSec, privacy: .public)s of silence (\(samples.count, privacy: .public) → \(trimmed.count, privacy: .public) samples)")
+        }
+
         var options = DecodingOptions()
         options.task = .transcribe
         options.usePrefillPrompt = true
@@ -245,22 +251,39 @@ actor Transcriber {
         options.withoutTimestamps = true
         if let language {
             options.language = language
-        } else {
-            // "Auto" must actually detect: WhisperKit defaults detectLanguage to
-            // !usePrefillPrompt, and with prefill on + language nil the decoder
-            // forces <|en|> — Swedish speech came out as English "translation".
-            options.detectLanguage = true
+        } else if let detected = await resolveAutoLanguage(for: trimmed, pipeline: pipeline) {
+            options.language = detected
         }
-
-        let trimmed = Self.trimSilence(samples)
-        if trimmed.count < samples.count {
-            let savedSec = Double(samples.count - trimmed.count) / 16000.0
-            log.info("Trimmed \(savedSec, privacy: .public)s of silence (\(samples.count, privacy: .public) → \(trimmed.count, privacy: .public) samples)")
-        }
+        // If detection failed outright, language stays nil (prefill falls back
+        // to en). NEVER set options.detectLanguage: WhisperKit 0.18's
+        // in-transcribe detection returns wrong languages (id/nl) even on
+        // clean English audio, and the wrong prefill token then renders the
+        // output in that language.
 
         let results = try await pipeline.transcribe(audioArray: trimmed, decodeOptions: options)
         let text = results.map { $0.text }.joined(separator: " ")
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // Auto language, resolved with the (accurate) dedicated detection API and
+    // pinned per dictation session so streaming chunks can't diverge into
+    // different languages. Low-confidence detections (sub-second chunks) are
+    // used for their own chunk but don't pin — a later, clearer chunk decides.
+    private var autoLanguage: String?
+
+    func beginDictationSession() {
+        autoLanguage = nil
+    }
+
+    private func resolveAutoLanguage(for samples: [Float], pipeline: WhisperKit) async -> String? {
+        if let autoLanguage { return autoLanguage }
+        guard let detection = try? await pipeline.detectLangauge(audioArray: samples) else { return nil }
+        let confidence = detection.langProbs[detection.language].map { exp(Double($0)) } ?? 0
+        log.info("Auto language: '\(detection.language, privacy: .public)' confidence \(String(format: "%.2f", confidence), privacy: .public)")
+        // Pin only on confident detections over ≥1s of speech: a 0.3s slice
+        // measured "vi" at 0.54 confidence — confidence alone isn't enough.
+        if confidence >= 0.5, samples.count >= 16000 { autoLanguage = detection.language }
+        return detection.language
     }
 
     /// Trim leading/trailing silence based on 10ms RMS frames. Keeps 100ms of head/tail
