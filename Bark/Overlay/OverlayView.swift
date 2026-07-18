@@ -30,6 +30,12 @@ struct OverlayView: View {
                 )
                 .shadow(color: .black.opacity(0.45), radius: 20, x: 0, y: 8)
         )
+        // NSHostingView sizes the panel to this view's intrinsic size, and it
+        // sizes it ONCE — so the view must be constant and roomy: wide enough
+        // for the longest pill ("Downloading voice model… 99%") and padded
+        // enough that the shadow fades out inside the window instead of
+        // clipping into a hard rectangular plate around the pill.
+        .frame(width: 420, height: 170)
     }
 
     private var isDark: Bool { settings.darkModeEnabled }

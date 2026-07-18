@@ -31,11 +31,10 @@ final class OverlayController {
     private var hideGeneration = 0
 
     init() {
-        // Wide enough for the "Downloading voice model… 99%" pill, and tall
-        // enough for the drop shadow (radius 20, y+8) to fade out inside the
-        // panel — clipping it at the edge paints a hard-edged box around the
-        // pill. The panel is transparent, so the margin is invisible.
-        let rect = NSRect(x: 0, y: 0, width: 420, height: 150)
+        // Nominal only: NSHostingView drives the panel size from the SwiftUI
+        // content's intrinsic size (OverlayView carries its own transparent
+        // margin so the shadow never clips at the window edge).
+        let rect = NSRect(x: 0, y: 0, width: 220, height: 160)
         let panel = NSPanel(
             contentRect: rect,
             styleMask: [.borderless, .nonactivatingPanel],
