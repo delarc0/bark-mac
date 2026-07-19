@@ -147,14 +147,24 @@ actor Transcriber {
 
     func warmup() async {
         do {
-            if case .ready = state {} else { try await load() }
-            let silent = [Float](repeating: 0, count: 48000)  // 3s primes the decoder closer to typical clips
             let t0 = Date()
-            _ = try await transcribe(samples: silent, language: "en")  // pin: don't language-detect silence
+            try await warmupDecode()
             log.info("Warmup complete in \(Date().timeIntervalSince(t0), privacy: .public)s")
         } catch {
             log.error("Warmup failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Decode 3s of silence straight on the pipeline: primes the decoder and
+    /// doubles as the wedge probe. Deliberately bypasses transcribe(), whose
+    /// speechless-audio guard would skip the decode this exists to run.
+    private func warmupDecode() async throws {
+        if case .ready = state {} else { try await load() }
+        guard let pipeline else { return }
+        var options = Self.makeDecodingOptions()
+        options.language = "en"  // pin: don't language-detect silence
+        _ = try await pipeline.transcribe(audioArray: [Float](repeating: 0, count: 48000),
+                                          decodeOptions: options)
     }
 
     /// Launch-time warmup with a wedge detector. The ANE decoder path hangs
@@ -197,7 +207,7 @@ actor Transcriber {
         // timeout meant to detect it.
         let work = Task.detached { [weak self] in
             guard let self else { return }
-            _ = try await self.transcribe(samples: [Float](repeating: 0, count: 48000), language: "en")
+            try await self.warmupDecode()
         }
         let timeout = Task.detached {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -238,17 +248,20 @@ actor Transcriber {
                           userInfo: [NSLocalizedDescriptionKey: "Pipeline not loaded"])
         }
 
-        let trimmed = Self.trimSilence(samples)
+        // Whisper hallucinates confidently on speechless audio ("Thank you."
+        // at noSpeechProb 0.00, so WhisperKit's own gate can't catch it) —
+        // never decode audio our VAD saw no speech in. This also kills the
+        // "Thank you." that streaming used to append from pause/tail chunks.
+        guard let trimmed = Self.trimSilence(samples) else {
+            log.info("No speech energy in \(samples.count, privacy: .public) samples, skipping decode (hallucination guard)")
+            return ""
+        }
         if trimmed.count < samples.count {
             let savedSec = Double(samples.count - trimmed.count) / 16000.0
             log.info("Trimmed \(savedSec, privacy: .public)s of silence (\(samples.count, privacy: .public) → \(trimmed.count, privacy: .public) samples)")
         }
 
-        var options = DecodingOptions()
-        options.task = .transcribe
-        options.usePrefillPrompt = true
-        options.skipSpecialTokens = true
-        options.withoutTimestamps = true
+        var options = Self.makeDecodingOptions()
         if let language {
             options.language = language
         } else if let detected = await resolveAutoLanguage(for: trimmed, pipeline: pipeline) {
@@ -299,10 +312,25 @@ actor Transcriber {
         return lastConfidentLanguage ?? detection.language
     }
 
+    private static func makeDecodingOptions() -> DecodingOptions {
+        var options = DecodingOptions()
+        options.task = .transcribe
+        options.usePrefillPrompt = true
+        options.skipSpecialTokens = true
+        options.withoutTimestamps = true
+        // The default windowClipTime (1.0) makes the decode loop skip audio
+        // shorter than 1s ENTIRELY — every short dictation ("keep going")
+        // returned deterministically empty. Its anti-hallucination job is
+        // covered by our own speechless-audio guard, so turn it off.
+        options.windowClipTime = 0
+        return options
+    }
+
     /// Trim leading/trailing silence based on 10ms RMS frames. Keeps 100ms of head/tail
-    /// margin so we don't clip onset consonants or trailing breath.
-    private static func trimSilence(_ samples: [Float]) -> [Float] {
-        guard samples.count > 3200 else { return samples }
+    /// margin so we don't clip onset consonants or trailing breath. Returns nil when no
+    /// frame rises above the speech threshold: decoding speechless audio is Whisper's
+    /// number one hallucination trigger ("Thank you.").
+    private static func trimSilence(_ samples: [Float]) -> [Float]? {
         let sampleRate = 16_000
         let frameSize = sampleRate / 100           // 10ms
         let marginFrames = 10                      // 100ms
@@ -325,7 +353,8 @@ actor Transcriber {
             }
         }
 
-        if firstVoiced < 0 { return samples }  // pure silence → let Whisper see it
+        if firstVoiced < 0 { return nil }
+        guard samples.count > 3200 else { return samples }  // too short to bother trimming
 
         let startFrame = max(0, firstVoiced - marginFrames)
         let endFrame = min(frameCount - 1, lastVoiced + marginFrames)
