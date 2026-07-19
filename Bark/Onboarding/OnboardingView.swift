@@ -111,7 +111,7 @@ struct OnboardingView: View {
                 .padding(16)
         }
         .frame(width: 560, height: 420)
-        .tint(BarkPalette.neonGreen)
+        .tint(BarkPalette.lime)
         .onAppear { model.startPolling() }
         .onDisappear { model.stopPolling() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -197,7 +197,7 @@ private struct StepDots: View {
         HStack(spacing: 6) {
             ForEach(OnboardingModel.Step.allCases, id: \.rawValue) { step in
                 Circle()
-                    .fill(step.rawValue <= current.rawValue ? BarkPalette.neonGreen : Color.secondary.opacity(0.3))
+                    .fill(step.rawValue <= current.rawValue ? BarkPalette.lime : Color.secondary.opacity(0.3))
                     .frame(width: 6, height: 6)
             }
         }
@@ -217,7 +217,7 @@ private struct WelcomeStep: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Bark")
                         .font(.system(size: 30, weight: .bold, design: .monospaced))
-                        .foregroundStyle(BarkPalette.neonGreen)
+                        .foregroundStyle(BarkPalette.lime)
                     Text("Local dictation for macOS.")
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(.secondary)
@@ -239,7 +239,7 @@ private struct WelcomeStep: View {
 
     private func bullet(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(BarkPalette.neonGreen)
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(BarkPalette.lime)
             Text(text)
             Spacer(minLength: 0)
         }
@@ -265,7 +265,7 @@ private struct MicStep: View {
     private var statusRow: some View {
         HStack(spacing: 8) {
             Image(systemName: model.micGranted ? "checkmark.circle.fill" : "circle.dashed")
-                .foregroundStyle(model.micGranted ? BarkPalette.neonGreen : .secondary)
+                .foregroundStyle(model.micGranted ? BarkPalette.lime : .secondary)
             Text(statusText)
             Spacer()
         }
@@ -308,7 +308,7 @@ private struct AccessibilityStep: View {
     private var statusRow: some View {
         HStack(spacing: 8) {
             Image(systemName: model.axGranted ? "checkmark.circle.fill" : "circle.dashed")
-                .foregroundStyle(model.axGranted ? BarkPalette.neonGreen : .secondary)
+                .foregroundStyle(model.axGranted ? BarkPalette.lime : .secondary)
             Text(model.axGranted ? "Accessibility access granted." : "Waiting for permission…")
             Spacer()
         }
@@ -392,7 +392,7 @@ private struct DoneStep: View {
         case .ready:
             Label("Voice model ready — try it now", systemImage: "checkmark.circle.fill")
                 .font(.callout)
-                .foregroundStyle(BarkPalette.neonGreen)
+                .foregroundStyle(BarkPalette.lime)
         case .failed:
             Label("Model download failed — check your connection, then use Retry in the menu bar", systemImage: "exclamationmark.triangle.fill")
                 .font(.callout)
