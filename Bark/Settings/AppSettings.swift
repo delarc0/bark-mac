@@ -27,6 +27,7 @@ final class AppSettings: ObservableObject {
         static let soundsEnabled = "sounds.enabled"
         static let darkModeEnabled = "ui.darkMode"
         static let overlayEnabled = "ui.overlayEnabled"
+        static let notchIslandEnabled = "ui.notchIsland"
         static let cleanupEnabled = "text.cleanup"
         static let vocabulary = "text.vocabulary"
         static let streamingEnabled = "transcription.streaming"
@@ -108,6 +109,16 @@ final class AppSettings: ObservableObject {
     @Published var overlayEnabled: Bool {
         didSet {
             defaults.set(overlayEnabled, forKey: Key.overlayEnabled)
+            notify()
+        }
+    }
+
+    // When on, recording shows in the notch of the built-in display (a fake
+    // Dynamic Island) instead of the bottom-center pill. Only has any effect on
+    // a Mac with a notch; falls back to the pill on external/clamshell displays.
+    @Published var notchIslandEnabled: Bool {
+        didSet {
+            defaults.set(notchIslandEnabled, forKey: Key.notchIslandEnabled)
             notify()
         }
     }
@@ -196,6 +207,7 @@ final class AppSettings: ObservableObject {
         self.soundsEnabled = (defaults.object(forKey: Key.soundsEnabled) as? Bool) ?? true
         self.darkModeEnabled = (defaults.object(forKey: Key.darkModeEnabled) as? Bool) ?? true
         self.overlayEnabled = (defaults.object(forKey: Key.overlayEnabled) as? Bool) ?? true
+        self.notchIslandEnabled = (defaults.object(forKey: Key.notchIslandEnabled) as? Bool) ?? true
         self.cleanupEnabled = (defaults.object(forKey: Key.cleanupEnabled) as? Bool) ?? true
         if let data = defaults.data(forKey: Key.vocabulary),
            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {

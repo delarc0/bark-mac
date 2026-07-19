@@ -16,27 +16,58 @@ final class OverlayModel: ObservableObject {
 
 @MainActor
 final class OverlayController {
-    private let panel: NSPanel
+    // Two skins share one model: the bottom-center pill and the notch island.
+    // Which one reveals is decided per session in resolveSurface().
+    private enum Surface {
+        case pill
+        case island(NotchGeometry)
+    }
+
+    private let pillPanel: NSPanel
+    private let islandPanel: NSPanel
+    private let islandHost: NSHostingView<IslandView>
     private let model = OverlayModel()
     private let settings = AppSettings.shared
+
+    private let chinDepth: CGFloat = 36
+
     private var fadeTask: Task<Void, Never>?
     private var voicePollTimer: Timer?
     private var intendedState: OverlayModel.State = .idle
-    private var lastSpeechAt: Date?
 
     private let speakThreshold: Float = 0.03
     private var didRevealDuringSession = false
     // Bumped on every reveal; a pending fade-out completion from a previous hide
-    // must not order the panel out after a rapid re-press has revealed it again.
+    // must not order a panel out after a rapid re-press has revealed it again.
     private var hideGeneration = 0
 
+    // Chosen once per session (while nothing is showing) and kept across state
+    // transitions so a pointer move mid-dictation can't flip pill<->island.
+    private var currentSurface: Surface?
+    private var visiblePanel: NSPanel?
+
     init() {
-        // Nominal only: NSHostingView drives the panel size from the SwiftUI
-        // content's intrinsic size (OverlayView carries its own transparent
-        // margin so the shadow never clips at the window edge).
-        let rect = NSRect(x: 0, y: 0, width: 220, height: 160)
+        // Pill: nominal rect only — NSHostingView drives its size from the
+        // SwiftUI content's intrinsic size (OverlayView carries its own frame).
+        let pillRect = NSRect(x: 0, y: 0, width: 220, height: 160)
+        pillPanel = Self.makePanel(contentRect: pillRect)
+        let pillHost = NSHostingView(rootView: OverlayView(model: model, settings: AppSettings.shared))
+        pillHost.autoresizingMask = [.width, .height]
+        pillHost.frame = pillPanel.contentView?.bounds ?? pillRect
+        pillPanel.contentView = pillHost
+
+        // Island: sized explicitly per notch geometry at reveal time.
+        let islandRect = NSRect(x: 0, y: 0, width: 200, height: 70)
+        islandPanel = Self.makePanel(contentRect: islandRect)
+        islandHost = NSHostingView(rootView: IslandView(model: model, notchHeight: 34, chinDepth: chinDepth, width: 200))
+        islandHost.autoresizingMask = [.width, .height]
+        islandHost.frame = islandPanel.contentView?.bounds ?? islandRect
+        islandPanel.contentView = islandHost
+    }
+
+    private static func makePanel(contentRect: NSRect) -> NSPanel {
         let panel = NSPanel(
-            contentRect: rect,
+            contentRect: contentRect,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -50,14 +81,8 @@ final class OverlayController {
         panel.isOpaque = false
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = true
-        panel.animationBehavior = .utilityWindow
-
-        let host = NSHostingView(rootView: OverlayView(model: model, settings: AppSettings.shared))
-        host.autoresizingMask = [.width, .height]
-        host.frame = panel.contentView?.bounds ?? rect
-        panel.contentView = host
-
-        self.panel = panel
+        panel.animationBehavior = .none
+        return panel
     }
 
     func show(_ state: OverlayModel.State) {
@@ -83,11 +108,19 @@ final class OverlayController {
         hidePanel(fadeDelay: delay)
     }
 
+    // MARK: - Surface routing
+
+    private func resolveSurface() -> Surface {
+        if settings.notchIslandEnabled, let notch = NotchGeometry.forPointerScreen() {
+            return .island(notch)
+        }
+        return .pill
+    }
+
     // MARK: - Voice-gated reveal
 
     private func startVoicePolling() {
         stopVoicePolling()
-        lastSpeechAt = nil
         didRevealDuringSession = false
         guard settings.overlayEnabled else { return }
         model.state = .recording
@@ -118,7 +151,27 @@ final class OverlayController {
         fadeTask?.cancel()
         fadeTask = nil
         hideGeneration += 1
-        positionBottomCenter()
+
+        // Lock the surface for this session on the first reveal, keep it after.
+        let surface = currentSurface ?? resolveSurface()
+        currentSurface = surface
+
+        let panel: NSPanel
+        switch surface {
+        case .pill:
+            positionBottomCenter()
+            panel = pillPanel
+        case .island(let notch):
+            layoutIsland(for: notch)
+            panel = islandPanel
+        }
+
+        // Only one skin visible at a time.
+        if let other = visiblePanel, other !== panel {
+            other.orderOut(nil)
+        }
+        visiblePanel = panel
+
         if !panel.isVisible {
             panel.alphaValue = 0
             panel.orderFrontRegardless()
@@ -131,7 +184,7 @@ final class OverlayController {
 
     private func hidePanel(fadeDelay: TimeInterval = 0.2) {
         fadeTask?.cancel()
-        let panel = self.panel
+        let panel = visiblePanel
         let generation = hideGeneration
         fadeTask = Task { [weak self] in
             if fadeDelay > 0 {
@@ -140,6 +193,11 @@ final class OverlayController {
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self, self.hideGeneration == generation else { return }
+                guard let panel else {
+                    self.model.state = .idle
+                    self.currentSurface = nil
+                    return
+                }
                 NSAnimationContext.runAnimationGroup({ ctx in
                     ctx.duration = 0.18
                     panel.animator().alphaValue = 0
@@ -148,15 +206,19 @@ final class OverlayController {
                         guard let self, self.hideGeneration == generation else { return }
                         panel.orderOut(nil)
                         self.model.state = .idle
+                        self.currentSurface = nil
+                        self.visiblePanel = nil
                     }
                 })
             }
         }
     }
 
+    // MARK: - Positioning
+
     private func positionBottomCenter() {
-        panel.layoutIfNeeded()
-        let size = panel.frame.size
+        pillPanel.layoutIfNeeded()
+        let size = pillPanel.frame.size
         // The screen with the pointer is where the user is typing; NSScreen.main
         // (key-window screen) is often a different display for a menu-bar app.
         let mouse = NSEvent.mouseLocation
@@ -169,6 +231,23 @@ final class OverlayController {
         // 48pt panel put it (80pt origin + 24) so growing the panel for shadow
         // room doesn't move the pill on screen.
         let y = visible.minY + 104 - size.height / 2
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        pillPanel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    private func layoutIsland(for notch: NotchGeometry) {
+        // The island's top edge matches the notch width exactly, so it reads as
+        // the notch itself growing a chin downward (never covers a menu item).
+        let width = notch.width
+        let height = notch.height + chinDepth
+        islandHost.rootView = IslandView(
+            model: model,
+            notchHeight: notch.height,
+            chinDepth: chinDepth,
+            width: width
+        )
+        let screen = notch.screen.frame
+        let x = screen.midX - width / 2
+        let y = screen.maxY - height  // hangs from the very top of the screen
+        islandPanel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
 }

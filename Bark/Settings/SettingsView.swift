@@ -24,7 +24,7 @@ struct SettingsView: View {
         }
         .frame(width: 520, height: 340)
         .padding(20)
-        .tint(BarkPalette.neonGreen)
+        .tint(BarkPalette.lime)
     }
 }
 
@@ -45,7 +45,7 @@ private struct GeneralTab: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Bark")
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
-                        .foregroundStyle(BarkPalette.neonGreen)
+                        .foregroundStyle(BarkPalette.lime)
                     Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
@@ -65,9 +65,17 @@ private struct GeneralTab: View {
             }
 
             HStack {
-                Text("Overlay pill").frame(width: 140, alignment: .trailing)
+                Text("Overlay").frame(width: 140, alignment: .trailing)
                 Toggle("Show while speaking", isOn: $settings.overlayEnabled)
                     .toggleStyle(.switch)
+                Spacer()
+            }
+
+            HStack {
+                Text("Notch").frame(width: 140, alignment: .trailing)
+                Toggle("Use the notch when available", isOn: $settings.notchIslandEnabled)
+                    .toggleStyle(.switch)
+                    .disabled(!settings.overlayEnabled)
                 Spacer()
             }
 
