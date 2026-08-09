@@ -32,7 +32,11 @@ struct NotchGeometry {
         let leftW = screen.auxiliaryTopLeftArea?.width ?? 0
         let rightW = screen.auxiliaryTopRightArea?.width ?? 0
         let notchW = screen.frame.width - leftW - rightW
-        guard notchW > 0, notchW < screen.frame.width else { return nil }
+
+        // Refuse implausible geometry rather than draw a black slab across the
+        // menu bar: every shipping notch is roughly 150-220pt wide under a
+        // 30-40pt inset, and the pill is always a correct fallback.
+        guard (100...400).contains(notchW), (24...60).contains(top) else { return nil }
 
         self.screen = screen
         self.height = top

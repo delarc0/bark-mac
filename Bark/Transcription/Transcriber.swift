@@ -264,10 +264,15 @@ actor Transcriber {
             log.info("Trimmed \(savedSec, privacy: .public)s of silence (\(samples.count, privacy: .public) → \(trimmed.count, privacy: .public) samples)")
         }
 
+        // windowClipTime is 0 so short clips decode at all, which also means a
+        // speechless sliver in the final 30s window gets decoded and is prime
+        // hallucination material. Drop it when that is all it is.
+        let decoded = Self.trimTrailingSliver(trimmed)
+
         var options = Self.makeDecodingOptions()
         if let language {
             options.language = language
-        } else if let detected = await resolveAutoLanguage(for: trimmed, pipeline: pipeline) {
+        } else if let detected = await resolveAutoLanguage(for: decoded, pipeline: pipeline) {
             options.language = detected
         }
         // If detection failed outright, language stays nil (prefill falls back
@@ -276,7 +281,7 @@ actor Transcriber {
         // clean English audio, and the wrong prefill token then renders the
         // output in that language.
 
-        let results = try await pipeline.transcribe(audioArray: trimmed, decodeOptions: options)
+        let results = try await pipeline.transcribe(audioArray: decoded, decodeOptions: options)
         let text = results.map { $0.text }.joined(separator: " ")
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -303,15 +308,21 @@ actor Transcriber {
         }
         let confidence = detection.langProbs[detection.language].map { exp(Double($0)) } ?? 0
         log.info("Auto language: '\(detection.language, privacy: .public)' confidence \(String(format: "%.2f", confidence), privacy: .public)")
-        // Trust needs both gates: a 0.3s slice measured "vi" at 0.54
-        // confidence, so confidence alone isn't enough.
-        if confidence >= 0.5, samples.count >= 16000 {
+
+        // Two separate questions. Long, confident audio may both be used and
+        // pin the session. Short audio may still be USED when it is very sure
+        // of itself — a 0.9s clip detected at 0.95 is better evidence than a
+        // language remembered from an earlier dictation — but never pins, since
+        // a 0.3s slice once measured "vi" at 0.54.
+        let longEnough = samples.count >= 16000
+        if longEnough, confidence >= 0.5 {
             lastConfidentLanguage = detection.language
             // A session that began while this detection was in flight must not
             // inherit the pin (its own audio may be a different language).
             if token == sessionToken { autoLanguage = detection.language }
             return detection.language
         }
+        if confidence >= 0.9 { return detection.language }
         return lastConfidentLanguage ?? detection.language
     }
 
@@ -327,6 +338,18 @@ actor Transcriber {
         // covered by our own speechless-audio guard, so turn it off.
         options.windowClipTime = 0
         return options
+    }
+
+    /// Whisper decodes in 30s windows. If the last window is under a second and
+    /// holds no speech, hand it back trimmed: decoding a lone silent sliver is
+    /// what produces a stray "Thank you." glued to the end of a transcript.
+    private static func trimTrailingSliver(_ samples: [Float]) -> [Float] {
+        let window = 30 * 16_000
+        let remainder = samples.count % window
+        guard remainder > 0, remainder < 16_000, samples.count > remainder else { return samples }
+        let sliver = Array(samples[(samples.count - remainder)...])
+        guard trimSilence(sliver) == nil else { return samples }
+        return Array(samples[..<(samples.count - remainder)])
     }
 
     /// Trim leading/trailing silence based on 10ms RMS frames. Keeps 100ms of head/tail

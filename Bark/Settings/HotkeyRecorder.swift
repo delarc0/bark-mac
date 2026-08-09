@@ -45,6 +45,11 @@ struct HotkeyRecorder: View {
             Spacer()
         }
         .onDisappear { stopListening() }
+        // onDisappear does not fire when the Settings window is closed outright,
+        // which would leave the global tap stopped and this view still armed.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in
+            stopListening()
+        }
     }
 
     private func toggle() {

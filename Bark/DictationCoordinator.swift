@@ -34,6 +34,7 @@ final class DictationCoordinator {
     var onMicPermissionDenied: (() -> Void)?
     var onDeadInput: ((String) -> Void)?
     var onQuietInput: (() -> Void)?
+    var onEmptyResult: (() -> Void)?
     var onTranscriptionSucceeded: (() -> Void)?
 
     // Real microphones always carry some room noise; an all-zero recording only
@@ -70,6 +71,10 @@ final class DictationCoordinator {
 
     private func setState(_ next: State) {
         state = next
+        // Every abort path and the success path both end here, so this is the
+        // one hook that guarantees a copy of the user's clipboard is not left
+        // sitting in memory after the dictation that captured it.
+        if next == .idle { PasteService.discardSnapshot() }
         onStateChanged?(next)
     }
 
@@ -273,11 +278,23 @@ final class DictationCoordinator {
         let timeout = Self.transcriptionTimeout(sampleCount: samples.count)
         Task.detached { [weak self] in
             let t0 = Date()
+            // Outside the timeout: on a first run this waits on a 1.5 GB
+            // download plus a CoreML compile, which the decode budget would
+            // cut off and throw away the user's very first dictation.
+            do { try await transcriber.load() } catch {
+                log.error("Model load failed: \(error.localizedDescription, privacy: .public)")
+                await MainActor.run { [weak self] in
+                    SoundService.shared.playError()
+                    self?.setState(.idle)
+                }
+                return
+            }
             let work = Task { try await transcriber.transcribe(samples: samples, language: language) }
             do {
                 let text = try await Self.awaitWithTimeout(work, seconds: timeout)
                 log.info("Transcribe elapsed: \(Date().timeIntervalSince(t0), privacy: .public)s")
                 await Self.paste(text: text, log: log,
+                                 onEmpty: { [weak self] in self?.onEmptyResult?() },
                                  onSuccess: { [weak self] in self?.onTranscriptionSucceeded?() },
                                  onDone: { [weak self] in self?.setState(.idle) })
             } catch {
@@ -292,8 +309,11 @@ final class DictationCoordinator {
 
     private func runStreaming(tasks: [Task<String, Error>]) {
         let log = self.log
+        let transcriber = self.transcriber
         Task.detached { [weak self] in
             let t0 = Date()
+            // See runSingleShot: a first-run download must not eat the per-chunk budget.
+            try? await transcriber.load()
             var parts: [String] = []
             var failures = 0
             for (idx, task) in tasks.enumerated() {
@@ -315,7 +335,10 @@ final class DictationCoordinator {
                 }
                 return
             }
-            await Self.paste(text: combined, log: log,
+            // Keep a holed transcript (losing minutes of speech over one lost
+            // chunk is worse) but don't claim success with the done chime.
+            await Self.paste(text: combined, log: log, lossy: failures > 0,
+                             onEmpty: { [weak self] in self?.onEmptyResult?() },
                              onSuccess: { [weak self] in self?.onTranscriptionSucceeded?() },
                              onDone: { [weak self] in self?.setState(.idle) })
         }
@@ -357,7 +380,8 @@ final class DictationCoordinator {
         }
     }
 
-    private static func paste(text: String, log: Logger,
+    private static func paste(text: String, log: Logger, lossy: Bool = false,
+                              onEmpty: @escaping @MainActor @Sendable () -> Void,
                               onSuccess: @escaping @MainActor @Sendable () -> Void,
                               onDone: @escaping @MainActor @Sendable () -> Void) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -372,10 +396,20 @@ final class DictationCoordinator {
                 // Recorded before the paste so a fumbled paste is still recoverable.
                 TranscriptionHistory.shared.add(processed)
                 PasteService.pasteAtCursor(processed)
-                SoundService.shared.playDone()
-                onSuccess()
+                if lossy {
+                    SoundService.shared.playError()
+                } else {
+                    SoundService.shared.playDone()
+                    onSuccess()
+                }
             } else {
+                // Every route to an empty result lands here, and returning to
+                // idle in silence is how a whole dictation disappears without
+                // explanation. The guards upstream predict failure; this is the
+                // one place that knows it actually happened.
                 log.info("Empty transcription, nothing to paste")
+                SoundService.shared.playError()
+                onEmpty()
             }
             onDone()
         }

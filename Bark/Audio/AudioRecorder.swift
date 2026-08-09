@@ -22,7 +22,11 @@ final class AudioRecorder {
 
     // Touched only by the capture thread, between tap installs.
     private var selectedChannel: Int?
+    private var channelPeaks: [Float] = []
     private static let channelLatchLevel: Float = 0.02
+
+    private var rebuildAttempts = 0
+    private static let maxRebuildAttempts = 5
 
     // Total converted frames seen this session, so a recording that captured
     // nothing at all is distinguishable from one that captured silence.
@@ -82,6 +86,7 @@ final class AudioRecorder {
             }
         }
 
+        rebuildAttempts = 0
         try installCapture()
         log.info("Mic stream started: target=\(Int(Self.targetSampleRate), privacy: .public)Hz")
     }
@@ -113,6 +118,7 @@ final class AudioRecorder {
         input.removeTap(onBus: 0)
         // Safe here: the tap is uninstalled, so no capture thread is running.
         selectedChannel = nil
+        channelPeaks = []
         // The converter is captured by the tap closure rather than stored on self:
         // the render thread must never read state the main thread mutates.
         input.installTap(onBus: 0, bufferSize: 1024, format: hwFormat) { [weak self] buffer, _ in
@@ -154,7 +160,23 @@ final class AudioRecorder {
             }
             if !engine.isRunning {
                 log.error("Capture rebuild failed: \(error.localizedDescription, privacy: .public)")
+                // A device that is still settling (sample-rate change, a hub
+                // re-enumerating) refuses the bind for a moment. Without a
+                // retry the rest of the dictation is captured as nothing and
+                // the user gets a silently truncated transcript.
+                scheduleCaptureRebuildRetry()
             }
+        }
+    }
+
+    private func scheduleCaptureRebuildRetry() {
+        guard rebuildAttempts < Self.maxRebuildAttempts else {
+            log.error("Giving up on capture rebuild after \(Self.maxRebuildAttempts, privacy: .public) attempts")
+            return
+        }
+        rebuildAttempts += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.handleConfigurationChange()
         }
     }
 
@@ -257,18 +279,30 @@ final class AudioRecorder {
         if channels == 1 {
             dest.update(from: source[0], count: frames)
         } else {
-            if selectedChannel == nil {
-                // Lowest qualifying channel, not the loudest: microphone
-                // preamps occupy the first inputs, while loopback of system
-                // audio and ADAT sit at the end. Picking by level alone would
-                // latch onto music playing through the same interface and
-                // transcribe that instead of the voice.
-                for c in 0..<channels {
-                    var p: Float = 0
+            // Lowest qualifying channel, not the loudest: microphone preamps
+            // occupy the first inputs, while loopback of system audio and ADAT
+            // sit at the end. Picking by level alone would latch onto music
+            // playing through the same interface and transcribe that instead
+            // of the voice.
+            //
+            // Re-evaluated every buffer against a running per-channel peak, not
+            // frozen on the first one. The first buffer arrives ~21ms after the
+            // key goes down, before anyone has started speaking, so freezing
+            // there would let a loopback channel win by default and hold the
+            // whole session. Selection only ever moves to a LOWER index, so it
+            // cannot flap once the voice arrives.
+            if selectedChannel != 0 {
+                if channelPeaks.count != channels {
+                    channelPeaks = [Float](repeating: 0, count: channels)
+                }
+                let ceiling = selectedChannel ?? channels
+                for c in 0..<ceiling {
+                    var p = channelPeaks[c]
                     for i in 0..<frames {
                         let a = abs(sample(c, i))
                         if a > p { p = a }
                     }
+                    channelPeaks[c] = p
                     if p >= Self.channelLatchLevel {
                         selectedChannel = c
                         break

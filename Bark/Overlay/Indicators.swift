@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // lab37.tools design tokens (globals.css). Shared by the pill and the notch island.
@@ -10,6 +11,12 @@ enum BarkPalette {
     static let forest = Color(red: 0x14 / 255.0, green: 0x29 / 255.0, blue: 0x1D / 255.0)
     // Functional, not brand: a REC dot only reads as recording when it's red.
     static let recordingRed = Color(red: 0xFF / 255.0, green: 0x45 / 255.0, blue: 0x3A / 255.0)
+    static let transcribingAmber = Color(red: 0xFF / 255.0, green: 0xD7 / 255.0, blue: 0x00 / 255.0)
+
+    // The menu bar draws with AppKit; same values so the status dot and the
+    // pill cannot drift apart.
+    static let recordingRedNS = NSColor(recordingRed)
+    static let transcribingAmberNS = NSColor(transcribingAmber)
 }
 
 // Live audio bars, driven by the mic level. Recording only.

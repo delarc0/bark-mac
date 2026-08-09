@@ -30,7 +30,7 @@ enum PasteService {
         prepared = nil
 
         pb.clearContents()
-        pb.setString(text, forType: .string)
+        pb.writeObjects([concealedItem(text)])
         let ownChangeCount = pb.changeCount
 
         synthesizeCommandV()
@@ -45,6 +45,24 @@ enum PasteService {
                 restore(pb, saved)
             }
         }
+    }
+
+    /// Dictated text tagged so clipboard managers skip it. Bark keeps speech out
+    /// of any file it writes, but Raycast, Maccy, Alfred and friends poll the
+    /// pasteboard every few hundred milliseconds — well inside the restore
+    /// window — and would archive every transcription to their own on-disk
+    /// history. The nspasteboard.org convention is how you opt out.
+    static func concealedItem(_ text: String) -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        item.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        return item
+    }
+
+    /// The snapshot holds a full copy of whatever the user had on their
+    /// clipboard, so it must not outlive the dictation that took it.
+    static func discardSnapshot() {
+        prepared = nil
     }
 
     private struct Snapshot {

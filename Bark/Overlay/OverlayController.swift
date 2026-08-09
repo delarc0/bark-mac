@@ -205,7 +205,9 @@ final class OverlayController {
                     MainActor.assumeIsolated {
                         guard let self, self.hideGeneration == generation else { return }
                         panel.orderOut(nil)
-                        self.model.state = .idle
+                        // A rapid re-press may already own the model; resetting
+                        // here would blank the pill mid-recording.
+                        if self.intendedState == .idle { self.model.state = .idle }
                         self.currentSurface = nil
                         self.visiblePanel = nil
                     }

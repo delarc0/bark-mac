@@ -52,10 +52,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self?.presentQuietInputNotice()
         }
 
+        dictation.onEmptyResult = { [weak self] in
+            self?.presentQuietInputNotice()
+        }
+
         // A dictation that worked proves the input is healthy, so a later
         // failure deserves its explanation again.
         dictation.onTranscriptionSucceeded = { [weak self] in
             self?.didWarnDeadInput = false
+            self?.didWarnQuietInput = false
         }
 
         // Restart the hotkey tap only when the mapping itself changed — a restart
@@ -153,6 +158,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // Shown at most once per launch: the condition persists across attempts and
     // a dialog on every hotkey press would be worse than the silence it replaces.
     private var didWarnDeadInput = false
+    private var didWarnQuietInput = false
 
     private func presentDeadInputAlert(deviceName: String) {
         guard !didWarnDeadInput else { return }
@@ -184,8 +190,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func presentQuietInputNotice() {
-        guard !didWarnDeadInput else { return }
-        didWarnDeadInput = true
+        guard !didWarnQuietInput else { return }
+        didWarnQuietInput = true
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "That was too quiet to transcribe"
@@ -270,8 +276,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return image
     }()
 
-    private static let recordingIndicator = dotIndicator(NSColor(red: 1.0, green: 0.2, blue: 0.2, alpha: 1.0))
-    private static let transcribingIndicator = dotIndicator(NSColor(red: 1.0, green: 0.84, blue: 0.0, alpha: 1.0))
+    private static let recordingIndicator = dotIndicator(BarkPalette.recordingRedNS)
+    private static let transcribingIndicator = dotIndicator(BarkPalette.transcribingAmberNS)
 
     private static func dotIndicator(_ color: NSColor) -> NSImage {
         let size = NSSize(width: 16, height: 16)
@@ -442,9 +448,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func copyHistoryEntry(_ sender: NSMenuItem) {
         guard let text = sender.representedObject as? String else { return }
+        // Never restored, unlike a dictation paste, so the concealed marker is
+        // the only thing keeping this out of clipboard-manager history files.
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        pasteboard.writeObjects([PasteService.concealedItem(text)])
     }
 
     @objc private func pickSystemDefault() {
@@ -496,7 +504,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func startAXPolling() {
         axPollTimer?.invalidate()
-        let deadline = Date().addingTimeInterval(120) // poll for 2 minutes
+        // No deadline: this poll is the only path that arms the tap without a
+        // relaunch, and granting access routinely takes longer than a couple of
+        // minutes (finding the pane, unlocking, or the remove-and-re-add dance
+        // after an update). Giving up leaves an app that looks installed and
+        // does nothing. It self-terminates the moment the grant lands, and
+        // until then Bark cannot work anyway.
+        //
         // .common mode: a default-mode timer stops firing while the status menu
         // is open, which is exactly when the user is staring at the AX hint.
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] timer in
@@ -507,9 +521,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                     self.settings.axWasGranted = true
                     _ = self.dictation.start()
                     self.rebuildMenu()
-                    timer.invalidate()
-                    self.axPollTimer = nil
-                } else if Date() > deadline {
                     timer.invalidate()
                     self.axPollTimer = nil
                 }
