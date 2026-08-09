@@ -44,6 +44,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self?.rebuildMenu()
         }
 
+        dictation.onDeadInput = { [weak self] deviceName in
+            self?.presentDeadInputAlert(deviceName: deviceName)
+        }
+
         // Restart the hotkey tap only when the mapping itself changed — a restart
         // resets held-state, so unrelated settings changes mid-hold would orphan
         // the recording session.
@@ -134,6 +138,39 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return .downloading(fraction)
         }
         return .transcribing
+    }
+
+    // Shown at most once per launch: the condition persists across attempts and
+    // a dialog on every hotkey press would be worse than the silence it replaces.
+    private var didWarnDeadInput = false
+
+    private func presentDeadInputAlert(deviceName: String) {
+        guard !didWarnDeadInput else { return }
+        didWarnDeadInput = true
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Bark heard nothing from \(deviceName)"
+        alert.informativeText = """
+            The recording contained no audio at all. Usually one of:
+
+            • Bark's microphone access was revoked. Even if System Settings shows it enabled, switch it off and on again.
+            • \(deviceName) is muted, unplugged, or its gain is down.
+            • A different input is selected than the one you speak into (Settings → Audio).
+            """
+        alert.addButton(withTitle: "Open Microphone Settings")
+        alert.addButton(withTitle: "Bark Settings")
+        alert.addButton(withTitle: "Dismiss")
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                NSWorkspace.shared.open(url)
+            }
+        case .alertSecondButtonReturn:
+            SettingsWindowController.shared.present()
+        default:
+            break
+        }
     }
 
     private func refreshOverlayForModelState() {

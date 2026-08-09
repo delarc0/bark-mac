@@ -32,6 +32,11 @@ final class DictationCoordinator {
     var deviceIDProvider: (() -> AudioDeviceID?)?
     var onStateChanged: ((State) -> Void)?
     var onMicPermissionDenied: (() -> Void)?
+    var onDeadInput: ((String) -> Void)?
+
+    // Real microphones always carry some room noise; an all-zero recording only
+    // happens when no audio reached the app at all.
+    private static let deadInputPeak: Float = 0.0005
 
     init(recorder: AudioRecorder?, transcriber: Transcriber) {
         self.recorder = recorder
@@ -97,6 +102,7 @@ final class DictationCoordinator {
         do {
             try recorder.start(deviceID: deviceID)
             recorder.beginRecording()
+            AudioLevelMonitor.shared.resetSessionPeak()
             recordStartedAt = Date()
             chunkTasks = []
             sessionStreaming = AppSettings.shared.streamingEnabled
@@ -168,6 +174,27 @@ final class DictationCoordinator {
             log.info("Tap too short (\(held, privacy: .public)s), discarded")
             chunkTasks.forEach { $0.cancel() }
             chunkTasks = []
+            setState(.idle)
+            return
+        }
+
+        // A recording that never rose above digital silence means no audio ever
+        // reached us: a revoked mic grant (macOS feeds silence rather than
+        // failing), a muted/unplugged input, or the wrong device selected.
+        // Without this the transcriber's speech guard drops it and nothing at
+        // all happens, which reads as "Bark is broken".
+        let peak = AudioLevelMonitor.shared.sessionPeak
+        log.info("Session peak level \(peak, privacy: .public) after \(held, privacy: .public)s")
+        if peak < Self.deadInputPeak {
+            log.error("No audio from input device (peak \(peak, privacy: .public)) — mic permission revoked, muted, or wrong device selected")
+            chunkTasks.forEach { $0.cancel() }
+            chunkTasks = []
+            recorder.stop()
+            SoundService.shared.playError()
+            let uid = AppSettings.shared.inputDeviceUID
+            let name = (uid.flatMap { AudioDeviceCatalog.device(withUID: $0) }
+                        ?? AudioDeviceCatalog.defaultInput())?.name ?? "the selected microphone"
+            onDeadInput?(name)
             setState(.idle)
             return
         }

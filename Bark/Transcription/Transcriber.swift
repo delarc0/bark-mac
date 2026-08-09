@@ -253,7 +253,10 @@ actor Transcriber {
         // never decode audio our VAD saw no speech in. This also kills the
         // "Thank you." that streaming used to append from pause/tail chunks.
         guard let trimmed = Self.trimSilence(samples) else {
-            log.info("No speech energy in \(samples.count, privacy: .public) samples, skipping decode (hallucination guard)")
+            var peak: Float = 0, sumSq: Float = 0
+            for s in samples { let a = abs(s); if a > peak { peak = a }; sumSq += s * s }
+            let rms = (sumSq / Float(max(samples.count, 1))).squareRoot()
+            log.info("No speech energy in \(samples.count, privacy: .public) samples (peak \(peak, privacy: .public), rms \(rms, privacy: .public)), skipping decode (hallucination guard)")
             return ""
         }
         if trimmed.count < samples.count {
