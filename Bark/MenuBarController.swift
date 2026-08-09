@@ -48,6 +48,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self?.presentDeadInputAlert(deviceName: deviceName)
         }
 
+        dictation.onQuietInput = { [weak self] in
+            self?.presentQuietInputNotice()
+        }
+
+        // A dictation that worked proves the input is healthy, so a later
+        // failure deserves its explanation again.
+        dictation.onTranscriptionSucceeded = { [weak self] in
+            self?.didWarnDeadInput = false
+        }
+
         // Restart the hotkey tap only when the mapping itself changed — a restart
         // resets held-state, so unrelated settings changes mid-hold would orphan
         // the recording session.
@@ -170,6 +180,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             SettingsWindowController.shared.present()
         default:
             break
+        }
+    }
+
+    private func presentQuietInputNotice() {
+        guard !didWarnDeadInput else { return }
+        didWarnDeadInput = true
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "That was too quiet to transcribe"
+        alert.informativeText = "Bark captured audio, but the level was too low for speech recognition. Turn up the gain on your microphone, move closer to it, or pick a different input under Settings → Audio."
+        alert.addButton(withTitle: "Bark Settings")
+        alert.addButton(withTitle: "Dismiss")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            SettingsWindowController.shared.present()
         }
     }
 

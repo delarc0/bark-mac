@@ -20,6 +20,18 @@ final class AudioRecorder {
     private var currentDeviceID: AudioDeviceID?
     private var configChangeObserver: NSObjectProtocol?
 
+    // Touched only by the capture thread, between tap installs.
+    private var selectedChannel: Int?
+    private static let channelLatchLevel: Float = 0.02
+
+    // Total converted frames seen this session, so a recording that captured
+    // nothing at all is distinguishable from one that captured silence.
+    private var capturedFrames = 0
+
+    // Growing this array on the render thread means a multi-megabyte realloc
+    // inside the tap callback, which overruns the IO deadline and drops audio.
+    private static let reservedRecordingSeconds: Double = 180
+
     init() throws {
         guard let fmt = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -99,6 +111,8 @@ final class AudioRecorder {
         log.info("Capture format: \(hwFormat.sampleRate, privacy: .public)Hz \(hwFormat.channelCount, privacy: .public)ch -> mono \(Int(Self.targetSampleRate), privacy: .public)Hz")
 
         input.removeTap(onBus: 0)
+        // Safe here: the tap is uninstalled, so no capture thread is running.
+        selectedChannel = nil
         // The converter is captured by the tap closure rather than stored on self:
         // the render thread must never read state the main thread mutates.
         input.installTap(onBus: 0, bufferSize: 1024, format: hwFormat) { [weak self] buffer, _ in
@@ -107,6 +121,14 @@ final class AudioRecorder {
 
         engine.prepare()
         try engine.start()
+    }
+
+    /// Called from the capture thread, so it hops to main before touching the
+    /// engine; the current buffer is dropped rather than mislabelled.
+    private func requestCaptureRestart() {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleConfigurationChange()
+        }
     }
 
     private func handleConfigurationChange() {
@@ -150,9 +172,19 @@ final class AudioRecorder {
     func beginRecording() {
         lock.lock()
         recordingBuffer = preBuffer
+        recordingBuffer.reserveCapacity(Int(Self.targetSampleRate * Self.reservedRecordingSeconds))
         preBuffer.removeAll(keepingCapacity: true)
+        capturedFrames = 0
         recording = true
         lock.unlock()
+    }
+
+    /// Frames delivered by the hardware this session. Zero means the device
+    /// never produced a callback, which is a different fault from silence.
+    var capturedFrameCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedFrames
     }
 
     /// Returns all samples not yet consumed by `takeChunk()`. Non-streaming callers
@@ -182,15 +214,11 @@ final class AudioRecorder {
     // MARK: - Internal
 
     private func process(_ buffer: AVAudioPCMBuffer, converter: AVAudioConverter) {
-        guard let out = convert(buffer, using: converter) else { return }
-        var peak: Float = 0
-        for s in out {
-            let a = abs(s)
-            if a > peak { peak = a }
-        }
+        guard let (out, peak) = convert(buffer, using: converter) else { return }
         AudioLevelMonitor.shared.report(peak)
         lock.lock()
         defer { lock.unlock() }
+        capturedFrames += out.count
         if recording {
             recordingBuffer.append(contentsOf: out)
         } else {
@@ -201,10 +229,16 @@ final class AudioRecorder {
         }
     }
 
-    /// Sum every channel into one. A mic on any single input of a multichannel
-    /// box arrives at full level (silent channels add nothing), where averaging
-    /// would divide it by the channel count and bury it under the speech gate.
-    private func mixToMono(_ input: AVAudioPCMBuffer, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+    /// Reduce a multichannel interface to the one channel carrying the voice.
+    ///
+    /// Summing every channel would fold in whatever else the box exposes —
+    /// loopback of system audio, ADAT, unconnected inputs and their noise
+    /// floors — so a video playing through the same interface ends up in the
+    /// transcript. Instead, latch onto the loudest channel once anything
+    /// speech-level appears and stay there for the rest of the recording.
+    /// Until that happens the sum is used, so a quiet opening word is never
+    /// dropped while waiting to choose.
+    private func mixToMono(_ input: AVAudioPCMBuffer, format: AVAudioFormat) -> (buffer: AVAudioPCMBuffer, peak: Float)? {
         let frames = Int(input.frameLength)
         guard frames > 0, let source = input.floatChannelData else { return nil }
         let channels = Int(input.format.channelCount)
@@ -212,26 +246,72 @@ final class AudioRecorder {
               let dest = mono.floatChannelData?[0] else { return nil }
         mono.frameLength = input.frameLength
 
+        // Interleaved buffers expose one pointer holding every channel, so the
+        // per-channel pointers below would read past the end of the array.
+        let interleaved = input.format.isInterleaved
+        let stride = interleaved ? channels : 1
+        func sample(_ channel: Int, _ frame: Int) -> Float {
+            interleaved ? source[0][frame * stride + channel] : source[channel][frame]
+        }
+
         if channels == 1 {
             dest.update(from: source[0], count: frames)
         } else {
-            dest.update(repeating: 0, count: frames)
-            for c in 0..<channels {
-                let src = source[c]
-                for i in 0..<frames { dest[i] += src[i] }
+            if selectedChannel == nil {
+                // Lowest qualifying channel, not the loudest: microphone
+                // preamps occupy the first inputs, while loopback of system
+                // audio and ADAT sit at the end. Picking by level alone would
+                // latch onto music playing through the same interface and
+                // transcribe that instead of the voice.
+                for c in 0..<channels {
+                    var p: Float = 0
+                    for i in 0..<frames {
+                        let a = abs(sample(c, i))
+                        if a > p { p = a }
+                    }
+                    if p >= Self.channelLatchLevel {
+                        selectedChannel = c
+                        break
+                    }
+                }
             }
-            for i in 0..<frames { dest[i] = max(-1, min(1, dest[i])) }
+
+            if let channel = selectedChannel {
+                for i in 0..<frames { dest[i] = sample(channel, i) }
+            } else {
+                for i in 0..<frames {
+                    var sum: Float = 0
+                    for c in 0..<channels { sum += sample(c, i) }
+                    dest[i] = sum
+                }
+            }
         }
-        return mono
+
+        // Measured before the converter so a hot signal reads as hot; clamping
+        // here would both distort the audio and hide the overload from the
+        // level meter and the dead-input check.
+        var peak: Float = 0
+        for i in 0..<frames {
+            let a = abs(dest[i])
+            if a > peak { peak = a }
+        }
+        return (mono, peak)
     }
 
-    private func convert(_ input: AVAudioPCMBuffer, using converter: AVAudioConverter) -> [Float]? {
+    private func convert(_ input: AVAudioPCMBuffer, using converter: AVAudioConverter) -> (samples: [Float], peak: Float)? {
+        // A device can change rate mid-recording; converting 48k buffers as if
+        // they were still 44.1k would silently pitch-shift the tail.
+        guard input.format.sampleRate == converter.inputFormat.sampleRate else {
+            log.error("Input rate changed \(converter.inputFormat.sampleRate, privacy: .public) -> \(input.format.sampleRate, privacy: .public)Hz mid-capture; restarting")
+            requestCaptureRestart()
+            return nil
+        }
         let ratio = targetFormat.sampleRate / input.format.sampleRate
         let outCapacity = AVAudioFrameCount(Double(input.frameLength) * ratio) + 256
         guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else {
             return nil
         }
-        guard let mono = mixToMono(input, format: converter.inputFormat) else { return nil }
+        guard let (mono, peak) = mixToMono(input, format: converter.inputFormat) else { return nil }
 
         var error: NSError?
         var supplied = false
@@ -251,8 +331,8 @@ final class AudioRecorder {
         }
 
         let frames = Int(out.frameLength)
-        guard frames > 0, let channel = out.floatChannelData?[0] else { return [] }
-        return Array(UnsafeBufferPointer(start: channel, count: frames))
+        guard frames > 0, let channel = out.floatChannelData?[0] else { return ([], peak) }
+        return (Array(UnsafeBufferPointer(start: channel, count: frames)), peak)
     }
 
     private func setInputDevice(_ deviceID: AudioDeviceID) throws {

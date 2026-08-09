@@ -33,10 +33,15 @@ final class DictationCoordinator {
     var onStateChanged: ((State) -> Void)?
     var onMicPermissionDenied: (() -> Void)?
     var onDeadInput: ((String) -> Void)?
+    var onQuietInput: (() -> Void)?
+    var onTranscriptionSucceeded: (() -> Void)?
 
     // Real microphones always carry some room noise; an all-zero recording only
     // happens when no audio reached the app at all.
     private static let deadInputPeak: Float = 0.0005
+    // Below this the transcriber's speech gate rejects every frame, so warn
+    // rather than let the dictation vanish.
+    private static let quietInputPeak: Float = 0.012
 
     init(recorder: AudioRecorder?, transcriber: Transcriber) {
         self.recorder = recorder
@@ -184,7 +189,21 @@ final class DictationCoordinator {
         // Without this the transcriber's speech guard drops it and nothing at
         // all happens, which reads as "Bark is broken".
         let peak = AudioLevelMonitor.shared.sessionPeak
-        log.info("Session peak level \(peak, privacy: .public) after \(held, privacy: .public)s")
+        let captured = recorder.capturedFrameCount
+        log.info("Session peak \(peak, privacy: .public), \(captured, privacy: .public) frames after \(held, privacy: .public)s")
+
+        // A device that never delivered a callback (Bluetooth still negotiating,
+        // engine not up yet) is a transient worth retrying, not a dead mic.
+        if captured == 0 {
+            log.warning("Input produced no audio callbacks — device likely still starting")
+            chunkTasks.forEach { $0.cancel() }
+            chunkTasks = []
+            recorder.stop()
+            SoundService.shared.playError()
+            setState(.idle)
+            return
+        }
+
         if peak < Self.deadInputPeak {
             log.error("No audio from input device (peak \(peak, privacy: .public)) — mic permission revoked, muted, or wrong device selected")
             chunkTasks.forEach { $0.cancel() }
@@ -194,8 +213,22 @@ final class DictationCoordinator {
             let uid = AppSettings.shared.inputDeviceUID
             let name = (uid.flatMap { AudioDeviceCatalog.device(withUID: $0) }
                         ?? AudioDeviceCatalog.defaultInput())?.name ?? "the selected microphone"
-            onDeadInput?(name)
+            // Idle first: the alert blocks, and the overlay must not sit there
+            // claiming to be listening behind it.
             setState(.idle)
+            onDeadInput?(name)
+            return
+        }
+
+        // Audible but under the transcriber's speech gate: the recording would
+        // be discarded downstream and, without this, produce no feedback at all.
+        if peak < Self.quietInputPeak {
+            log.warning("Input too quiet to transcribe (peak \(peak, privacy: .public))")
+            chunkTasks.forEach { $0.cancel() }
+            chunkTasks = []
+            SoundService.shared.playError()
+            setState(.idle)
+            onQuietInput?()
             return
         }
 
@@ -244,7 +277,9 @@ final class DictationCoordinator {
             do {
                 let text = try await Self.awaitWithTimeout(work, seconds: timeout)
                 log.info("Transcribe elapsed: \(Date().timeIntervalSince(t0), privacy: .public)s")
-                await Self.paste(text: text, log: log, onDone: { [weak self] in self?.setState(.idle) })
+                await Self.paste(text: text, log: log,
+                                 onSuccess: { [weak self] in self?.onTranscriptionSucceeded?() },
+                                 onDone: { [weak self] in self?.setState(.idle) })
             } catch {
                 log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
                 await MainActor.run { [weak self] in
@@ -280,7 +315,9 @@ final class DictationCoordinator {
                 }
                 return
             }
-            await Self.paste(text: combined, log: log, onDone: { [weak self] in self?.setState(.idle) })
+            await Self.paste(text: combined, log: log,
+                             onSuccess: { [weak self] in self?.onTranscriptionSucceeded?() },
+                             onDone: { [weak self] in self?.setState(.idle) })
         }
     }
 
@@ -320,7 +357,9 @@ final class DictationCoordinator {
         }
     }
 
-    private static func paste(text: String, log: Logger, onDone: @escaping @MainActor @Sendable () -> Void) async {
+    private static func paste(text: String, log: Logger,
+                              onSuccess: @escaping @MainActor @Sendable () -> Void,
+                              onDone: @escaping @MainActor @Sendable () -> Void) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         await MainActor.run {
             let settings = AppSettings.shared
@@ -334,6 +373,7 @@ final class DictationCoordinator {
                 TranscriptionHistory.shared.add(processed)
                 PasteService.pasteAtCursor(processed)
                 SoundService.shared.playDone()
+                onSuccess()
             } else {
                 log.info("Empty transcription, nothing to paste")
             }
