@@ -81,10 +81,22 @@ final class AudioRecorder {
             throw NSError(domain: "AudioRecorder", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "Hardware reported sample rate 0 — device unavailable?"])
         }
-        guard let converter = AVAudioConverter(from: hwFormat, to: targetFormat) else {
+        // AVAudioConverter emits pure silence (no error) when asked to downmix a
+        // multichannel interface to mono — verified on a 12-channel Audient iD14,
+        // every channel in, digital zero out. So mix to mono ourselves and leave
+        // the converter nothing but the sample-rate change it handles correctly.
+        guard let monoHWFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                               sampleRate: hwFormat.sampleRate,
+                                               channels: 1,
+                                               interleaved: false) else {
+            throw NSError(domain: "AudioRecorder", code: 5,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to build mono format at \(hwFormat.sampleRate)Hz"])
+        }
+        guard let converter = AVAudioConverter(from: monoHWFormat, to: targetFormat) else {
             throw NSError(domain: "AudioRecorder", code: 4,
                           userInfo: [NSLocalizedDescriptionKey: "Failed to build converter for \(hwFormat.sampleRate)Hz input"])
         }
+        log.info("Capture format: \(hwFormat.sampleRate, privacy: .public)Hz \(hwFormat.channelCount, privacy: .public)ch -> mono \(Int(Self.targetSampleRate), privacy: .public)Hz")
 
         input.removeTap(onBus: 0)
         // The converter is captured by the tap closure rather than stored on self:
@@ -189,12 +201,37 @@ final class AudioRecorder {
         }
     }
 
+    /// Sum every channel into one. A mic on any single input of a multichannel
+    /// box arrives at full level (silent channels add nothing), where averaging
+    /// would divide it by the channel count and bury it under the speech gate.
+    private func mixToMono(_ input: AVAudioPCMBuffer, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let frames = Int(input.frameLength)
+        guard frames > 0, let source = input.floatChannelData else { return nil }
+        let channels = Int(input.format.channelCount)
+        guard let mono = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: input.frameLength),
+              let dest = mono.floatChannelData?[0] else { return nil }
+        mono.frameLength = input.frameLength
+
+        if channels == 1 {
+            dest.update(from: source[0], count: frames)
+        } else {
+            dest.update(repeating: 0, count: frames)
+            for c in 0..<channels {
+                let src = source[c]
+                for i in 0..<frames { dest[i] += src[i] }
+            }
+            for i in 0..<frames { dest[i] = max(-1, min(1, dest[i])) }
+        }
+        return mono
+    }
+
     private func convert(_ input: AVAudioPCMBuffer, using converter: AVAudioConverter) -> [Float]? {
         let ratio = targetFormat.sampleRate / input.format.sampleRate
         let outCapacity = AVAudioFrameCount(Double(input.frameLength) * ratio) + 256
         guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else {
             return nil
         }
+        guard let mono = mixToMono(input, format: converter.inputFormat) else { return nil }
 
         var error: NSError?
         var supplied = false
@@ -205,7 +242,7 @@ final class AudioRecorder {
             }
             supplied = true
             outStatus.pointee = .haveData
-            return input
+            return mono
         }
 
         if status == .error || error != nil {
