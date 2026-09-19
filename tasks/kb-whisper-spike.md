@@ -57,3 +57,38 @@ community weights; verify our conversion matches the GGML reference output).
 ## Notes
 - Competitive moat: KB-Whisper Swedish ~5% WER vs Fluid/Parakeet ~15%, ~3x.
 - Drop large-v3-turbo (quality compromise) for full large-v3 on English.
+
+## Shipping conversion (2026-09-19) — DONE
+
+Converted from KBLab's official checkpoint ourselves, as the decision gate
+required. A signed, notarized product does not ship third-party community
+weights.
+
+```bash
+git clone --depth 1 https://github.com/argmaxinc/whisperkittools
+cd whisperkittools && python3 -m venv .venv && source .venv/bin/activate
+pip install -e .          # pulls torch 2.5, coremltools 9.0
+whisperkit-generate-model --model-version KBLab/kb-whisper-large --output-dir <out>
+```
+
+Produces `<out>/KBLab_kb-whisper-large/` with AudioEncoder/MelSpectrogram/
+TextDecoder `.mlmodelc` plus compute plans, 2.9 GB, in ~11 min on the M5 Pro.
+
+- **Verified against the reference:** on the same Swedish clip our conversion
+  returns output byte-identical to the community `mickekringai/kb-whisper-coreml`
+  build that the July spike measured. That is what makes it a drop-in.
+- It ships **without** `config.json` / `generation_config.json`, which the
+  community build has. WhisperKit does not need them: the tokenizer resolves
+  from the model NAME (`ModelRole.tokenizerVariant` = `openai_whisper-large-v3`),
+  not from the folder.
+- Installed locally at
+  `~/Documents/huggingface/models/lab37/kb-whisper-coreml/kb_whisper-large`,
+  which is the path `ModelRole.swedish` derives from repo + variant.
+- **NOT PUBLISHED YET.** Until these weights are hosted, Bark's Swedish download
+  path is inert for anyone who does not already have the folder, and Swedish
+  falls back to the general model (logged, not silent). Publishing is an
+  outward-facing step and needs Erik's go plus an HF write token.
+- **License:** KB-Whisper is Apache 2.0 (National Library of Sweden / KBLab).
+  Redistribution is permitted with attribution and disclosure of changes, so
+  whatever we publish carries a NOTICE naming KBLab, stating that we converted
+  the checkpoint to CoreML, and citing their Interspeech 2025 paper.

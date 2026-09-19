@@ -32,17 +32,20 @@ actor Transcriber {
         /// tokenizer, so it loads correctly under the large-v3 name.
         var tokenizerVariant: String { "openai_whisper-large-v3" }
 
+        /// Our own CoreML conversion of KBLab's official checkpoint, produced
+        /// with whisperkittools and verified to match the reference output.
+        /// A signed product does not ship third-party community weights.
         var repo: String {
             switch self {
             case .general: "argmaxinc/whisperkit-coreml"
-            case .swedish: "mickekringai/kb-whisper-coreml"
+            case .swedish: "lab37/kb-whisper-coreml"
             }
         }
 
         var variant: String {
             switch self {
             case .general: "openai_whisper-large-v3"
-            case .swedish: "large"
+            case .swedish: "kb_whisper-large"
             }
         }
 
