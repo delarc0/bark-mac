@@ -20,7 +20,6 @@ final class AppSettings: ObservableObject {
         static let hotkeyKeyCode = "hotkey.keyCode"
         static let hotkeyFlagMask = "hotkey.flagMask"
         static let hotkeyDisplayName = "hotkey.displayName"
-        static let modelVariant = "transcriber.model"
         static let language = "transcriber.language"
         static let inputDeviceUID = "audio.deviceUID"
         static let onboardingCompleted = "onboarding.completed"
@@ -56,9 +55,13 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    @Published var modelVariant: String {
+    // Routing is automatic (Swedish -> kb-whisper-large, everything else ->
+    // whisper-large-v3), so there is no model picker. This only decides whether
+    // the second model is fetched at all: it is ~2.9 GB and buys nothing for a
+    // user who never dictates Swedish.
+    @Published var swedishModelEnabled: Bool {
         didSet {
-            defaults.set(modelVariant, forKey: Key.modelVariant)
+            defaults.set(swedishModelEnabled, forKey: barkSwedishModelDefaultsKey)
             notify()
         }
     }
@@ -200,7 +203,7 @@ final class AppSettings: ObservableObject {
         self.hotkeyFlagMask = storedMask ?? AppSettings.defaultRightOptionFlagMask
 
         self.hotkeyDisplayName = defaults.string(forKey: Key.hotkeyDisplayName) ?? "Right Option"
-        self.modelVariant = defaults.string(forKey: Key.modelVariant) ?? "openai_whisper-large-v3_turbo"
+        self.swedishModelEnabled = (defaults.object(forKey: barkSwedishModelDefaultsKey) as? Bool) ?? true
         self.language = defaults.string(forKey: Key.language)
         self.inputDeviceUID = defaults.string(forKey: Key.inputDeviceUID)
         self.onboardingCompleted = defaults.bool(forKey: Key.onboardingCompleted)
@@ -238,9 +241,4 @@ final class AppSettings: ObservableObject {
     // NX_DEVICERALTKEYMASK — isolates right-Option from left-Option.
     static let defaultRightOptionFlagMask: UInt64 = 0x0000_0040
 
-    static let availableModels: [(id: String, label: String, approxSizeGB: Double)] = [
-        ("openai_whisper-large-v3_turbo", "Large v3 turbo (best quality)", 1.5),
-        ("openai_whisper-small", "Small (faster, lower quality)", 0.5),
-        ("openai_whisper-tiny", "Tiny (fastest, lowest quality)", 0.08),
-    ]
 }

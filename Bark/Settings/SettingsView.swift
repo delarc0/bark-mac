@@ -188,15 +188,13 @@ private struct ModelTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Whisper model").frame(width: 120, alignment: .trailing)
-                Picker("", selection: $settings.modelVariant) {
-                    ForEach(AppSettings.availableModels, id: \.id) { model in
-                        Text("\(model.label)  (~\(String(format: "%.2g", model.approxSizeGB)) GB)")
-                            .tag(model.id)
-                    }
+                Text("Transcription").frame(width: 120, alignment: .trailing)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Swedish  →  kb-whisper-large")
+                    Text("Everything else  →  whisper-large-v3")
                 }
-                .labelsHidden()
-                .frame(maxWidth: 360)
+                .font(.system(size: 12, design: .monospaced))
+                Spacer()
             }
 
             HStack(alignment: .firstTextBaseline) {
@@ -212,10 +210,25 @@ private struct ModelTab: View {
                 .frame(maxWidth: 200)
             }
 
-            Text("Model change takes effect on next launch (downloads on first use). Language applies immediately.")
+            Text("Language applies immediately.")
                 .foregroundStyle(.secondary)
                 .font(.system(size: 12))
                 .padding(.leading, 128)
+
+            Divider()
+
+            HStack {
+                Text("Swedish model").frame(width: 120, alignment: .trailing)
+                Toggle("Use kb-whisper-large for Swedish (~2.9 GB)", isOn: $settings.swedishModelEnabled)
+                    .toggleStyle(.switch)
+                Spacer()
+            }
+
+            Text("KB-Whisper roughly halves the error rate on Swedish (4.6% vs 8.4% measured on FLEURS). It loads in the background after launch; until it is ready, Swedish runs on whisper-large-v3. Takes effect on next launch.")
+                .foregroundStyle(.secondary)
+                .font(.system(size: 11))
+                .padding(.leading, 128)
+                .fixedSize(horizontal: false, vertical: true)
 
             Divider()
 

@@ -29,7 +29,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             Logger(subsystem: "se.lab37.bark.mac", category: "MenuBar")
                 .error("AudioRecorder init failed — dictation disabled: \(error.localizedDescription, privacy: .public)")
         }
-        transcriber = Transcriber(modelVariant: AppSettings.shared.modelVariant)
+        transcriber = Transcriber()
         dictation = DictationCoordinator(recorder: rec, transcriber: transcriber)
         super.init()
 
@@ -126,6 +126,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let t0 = Date()
             await transcriber.warmupSelfHealing()
             log.info("Eager load + warmup finished in \(Date().timeIntervalSince(t0), privacy: .public)s")
+            // Strictly after the general model is warm: the Swedish model is a
+            // second multi-GB load and must never delay first dictation.
+            await transcriber.prepareSwedishModel()
         }
     }
 
@@ -487,6 +490,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func retryModelLoad() {
         Task.detached { [transcriber] in
             await transcriber.warmupSelfHealing()
+            await transcriber.prepareSwedishModel()
         }
     }
 
