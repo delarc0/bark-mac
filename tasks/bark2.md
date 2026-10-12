@@ -328,3 +328,28 @@ clips and the same normaliser:
   Every number from here on is on the fixed id list, so July's figures are no
   longer the reference.
 - Nothing was reconverted.
+
+## S0b result (2026-10-12): Parakeet TDT 0.6B v3
+
+FluidAudio 0.17.7 (Apache 2.0, pinned exact), `AsrModels` v3 with its default
+int8 encoder, `AsrManager` default config, no language hint (v3 has no
+language pinning; its hint only filters scripts). Run by the eval-only
+`fluid-eval parakeet` executable; no app-facing target links FluidAudio. Same
+60-clip sets and normaliser as S0, decode time per clip after load and a 3 s
+warmup.
+
+| clips | model | WER | decode median | decode p90 | RTF |
+|-------|-------|-----|---------------|------------|-----|
+| sv | parakeet-tdt-0.6b-v3 | 16.74% | 0.05 s | 0.07 s | 0.005 |
+| sv | kb-whisper-large (S0) | **5.97%** | 2.00 s | 2.62 s | 0.173 |
+| en | parakeet-tdt-0.6b-v3 | 5.97% | 0.05 s | 0.09 s | 0.005 |
+| en | whisper-large-v3 (S0) | **4.71%** | 1.34 s | 1.72 s | 0.119 |
+
+- Parakeet is about 35 times faster and makes 2.8 times the Swedish errors
+  of KB. The Swedish number matches the ~16.8% the PRD already cited.
+- On English it trails large-v3 by 1.3 points.
+- The model choice stands: KB for Swedish, large-v3 for everything else. If
+  Parakeet earns a place, it is as the fast live preview (S2's slot), not the
+  final text.
+- Not measured: the int8-v2 encoder and FluidAudio's newer "Parakeet Ultra"
+  model, which its README calls more accurate than v3.
