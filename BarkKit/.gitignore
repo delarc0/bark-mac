@@ -1,0 +1,5 @@
+.build/
+.swiftpm/
+eval/.venv/
+__pycache__/
+!Package.resolved
