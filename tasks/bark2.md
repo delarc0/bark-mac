@@ -569,3 +569,88 @@ on only when the audio exceeds 30 s. Shipped to today's Bark as d652c62
 (p0-argmax-oss, built, not installed). Bark2: segments are VAD-closed and
 capped under 30 s, so every decode stays inside one window; the rule stays
 as a guard and as an eval case.
+
+## S1d result (2026-10-12): a length cap buys latency with accuracy
+
+`stream-eval --cap <s>`: Silero 0.5 s pause, no prompt, plus a forced cut once
+the open segment reaches the cap, placed mid-way through the longest pause of
+60 ms or more in its last 1.5 s (forced at 2x the cap if none). First 20 clips
+of dict-sv:
+
+| mechanism | WER | release-to-final p50 / p95 |
+|-----------|-----|----------------------------|
+| Silero, no cap (S1 winner) | 7.38% | 1.74 / 2.51 s |
+| cap 5 s | 11.45% | 0.96 / 1.60 s |
+| cap 3 s | 14.25% | 0.78 / 1.53 s |
+
+Rejected: the cap meets the proposed D3 but doubles Swedish WER. Three causes,
+all visible in the parts: short segments come back empty ("räkenskapsåret
+2005", "säger Glen Cushing" lost), cuts still land inside words ("framträda"
+became "framtid | Trädande") and KB loses context ("läckan" became
+"läkaren"). Cutting a running utterance is off the table; the remaining lever
+is the cost of the release decode itself. The first cut variant (quietest
+20 ms frame) was worse on the same seams in a 5-clip smoke run.
+
+## S1e result (2026-10-12): the release wait is the engine, and MLX cuts it 3x
+
+`bark-eval` now logs WhisperKit's own timing split and takes `--encoder` /
+`--decoder gpu|ane|all`. One-shot decode of a ~10 s dictation, medians:
+
+| route | total | encoder | decoder loop | tokens | per token |
+|-------|-------|---------|--------------|--------|-----------|
+| sv, KB-large | 2.13 s | 0.31 s | 2.12 s | 47 | 45 ms |
+| en, large-v3 | 1.39 s | 0.11 s | 1.39 s | 32 | 44 ms |
+
+- The wait is the token-by-token decoder, not the encoder. Compute placement
+  barely moves it: KB decoder on GPU p50 1.93 s (p95 worse, 3.36 s), on
+  `.all` 1.89 s, encoder on the ANE 2.02 s; text identical in every case.
+- argmax's `openai_whisper-large-v3_turbo` is NOT OpenAI's 4-layer turbo: it
+  ships the same 1.7 GB 32-layer decoder (plus a prefill model) and produced
+  identical transcripts. No smaller-decoder test was run.
+- 45 ms per token for a 1.7 GB decoder is far below what this Mac's memory
+  bandwidth allows, so the overhead is the CoreML path. Same weights on MLX
+  (`mlx-whisper`, fp16; KB converted locally with Apple's mlx-examples
+  `convert.py`, not uploaded):
+
+| set | engine | WER | release decode p50 / p95 | per token |
+|-----|--------|-----|--------------------------|-----------|
+| dict-sv | WhisperKit CoreML (today) | 5.97% | 2.02 / 2.75 s | 45 ms |
+| dict-sv | MLX fp16 | **5.89%** | **0.66 / 0.89 s** | 15 ms |
+| dict-en | WhisperKit CoreML (today) | 4.71% | 1.38 / 1.84 s | 44 ms |
+| dict-en | MLX fp16 | **4.35%** | **0.51 / 0.64 s** | 18 ms |
+
+(greedy, no fallback, M5 Pro.) One-shot MLX meets the proposed D3 with no
+streaming at all, and Silero segmentation shortens it further.
+
+Full harness on MLX (`score.py` gate against the CoreML baseline, fallback
+ladder on, same thresholds as WhisperKit):
+
+| set/model | CoreML WER | MLX WER | MLX median decode |
+|-----------|-----------|---------|-------------------|
+| fleurs-sv/swedish | 5.97% | 5.81% (5.66% with the no-speech policy) | 0.67 s (CoreML 2.01 s) |
+| fleurs-en/general | 4.71% | 4.56% | 0.52 s |
+| fleurs-sv/general | 9.07% | 9.38% (gate +0.31, slack 0.30) | 0.67 s |
+
+Gate failures and what they are:
+- **noise/swedish, 28 hallucinated words** ("Tack!", "Musik" on every noise
+  clip; CoreML 0). mlx-whisper always suppresses the no-speech token, and KB
+  never raises `no_speech_prob` at the start position (0.00 on noise and
+  speech alike), so the standard skip rule cannot fire. KB says "silence" by
+  generating the no-speech token, which WhisperKit turns into empty text.
+  Policy for Bark2's decoder: let the token through on audio of 1 s or more,
+  a decode that opens with it is empty; under 1 s keep it suppressed (S1b).
+  Measured: noise 28/28 empty, short25-sv 0 empty, fleurs-sv 0 empty and WER
+  5.66%.
+- short08-en/general, 5 empty vs 2: MLX returns empty where CoreML returned
+  junk ("*Gunshot*", "you") on 0.8 s clips. Accepted: empty is the better
+  failure for dictation. Rebaseline.
+- fleurs-en/swedish 63.8% vs 56.3%: KB on English is the translation canary,
+  not a route. fleurs-sv/general +0.31: v3 is only the low-confidence fallback
+  for Swedish; watch it in the Swift port.
+
+Verdict: switch the Bark2 engine from WhisperKit/CoreML to MLX. 3x faster at
+release on both routes with WER equal or better. Next: spike S8, a Swift MLX
+Whisper decoder (mlx-swift; mlx-audio-swift as reference, not a dependency)
+that owns the decode policy above and must reproduce these numbers. Costs to
+measure there: GPU instead of ANE (power, and S7's 90-minute budget), model
+memory (fp16 KB 3.1 GB; try 8-bit), load and first-decode time.

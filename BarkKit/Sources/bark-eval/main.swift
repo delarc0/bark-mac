@@ -1,3 +1,4 @@
+import CoreML
 import Foundation
 import WhisperKit
 
@@ -5,7 +6,7 @@ import WhisperKit
 // writes one JSON line per clip. Deliberately skips Bark's silence trimming:
 // this measures the raw engine.
 
-let usage = "usage: bark-eval --model general|swedish --language <code> --clips <dir> --out <file.jsonl> [--suppress-nospeech 1]"
+let usage = "usage: bark-eval --model general|turbo|swedish --language <code> --clips <dir> --out <file.jsonl> [--suppress-nospeech 1] [--encoder gpu|ane|all] [--decoder gpu|ane|all]"
 
 var args: [String: String] = [:]
 var argv = CommandLine.arguments.dropFirst()
@@ -28,6 +29,7 @@ let models = FileManager.default.homeDirectoryForCurrentUser
 let modelFolder: URL
 switch model {
 case "general": modelFolder = models.appendingPathComponent("argmaxinc/whisperkit-coreml/openai_whisper-large-v3")
+case "turbo": modelFolder = models.appendingPathComponent("argmaxinc/whisperkit-coreml/openai_whisper-large-v3_turbo")
 case "swedish": modelFolder = models.appendingPathComponent("lab37/kb-whisper-coreml/kb_whisper-large")
 default:
     FileHandle.standardError.write(Data("unknown model \(model)\n\(usage)\n".utf8))
@@ -47,12 +49,21 @@ func seconds(_ d: Duration) -> Double {
     Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
 }
 
+func computeUnits(_ name: String?, default fallback: MLComputeUnits) -> MLComputeUnits {
+    switch name {
+    case "gpu": .cpuAndGPU
+    case "ane": .cpuAndNeuralEngine
+    case "all": .all
+    default: fallback
+    }
+}
+
 let loadStart = clock.now
 let kit = try await WhisperKit(WhisperKitConfig(
     model: "openai_whisper-large-v3",
     modelFolder: modelFolder.path,
-    computeOptions: ModelComputeOptions(audioEncoderCompute: .cpuAndGPU,
-                                        textDecoderCompute: .cpuAndNeuralEngine),
+    computeOptions: ModelComputeOptions(audioEncoderCompute: computeUnits(args["encoder"], default: .cpuAndGPU),
+                                        textDecoderCompute: computeUnits(args["decoder"], default: .cpuAndNeuralEngine)),
     verbose: false,
     logLevel: .error,
     download: false))
@@ -102,6 +113,11 @@ struct Row: Encodable {
     let hypothesis: String
     let decode_seconds: Double
     let audio_seconds: Double
+    // WhisperKit's own split, summed over windows: where a release decode goes.
+    let encoding: Double
+    let decoding_loop: Double
+    let decoding_predictions: Double
+    let tokens: Double
 }
 let encoder = JSONEncoder()
 encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -113,7 +129,11 @@ for (index, clip) in clips.enumerated() {
     let decode = seconds(clock.now - start)
     let text = results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     let row = Row(id: String(clip.dropLast(4)), hypothesis: text,
-                  decode_seconds: decode, audio_seconds: Double(samples.count) / 16_000)
+                  decode_seconds: decode, audio_seconds: Double(samples.count) / 16_000,
+                  encoding: results.map(\.timings.encoding).reduce(0, +),
+                  decoding_loop: results.map(\.timings.decodingLoop).reduce(0, +),
+                  decoding_predictions: results.map(\.timings.decodingPredictions).reduce(0, +),
+                  tokens: results.map(\.timings.totalDecodingLoops).reduce(0, +))
     try out.write(contentsOf: encoder.encode(row) + Data("\n".utf8))
     log("\(index + 1)/\(clips.count) \(row.id) \(String(format: "%.2f", decode))s")
 }

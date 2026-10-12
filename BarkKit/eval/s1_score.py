@@ -25,7 +25,7 @@ def seams(norm, parts):
 
 
 eval_dir = Path(sys.argv[1])
-s1 = eval_dir / "s1"
+s1 = eval_dir / (sys.argv[2] if len(sys.argv) > 2 else "s1")
 print(f"{'set':8} {'mechanism':11} {'n':>3} {'WER':>7} {'empty':>5} {'r2f p50':>7} {'r2f p95':>7} "
       f"{'busy/aud':>8} {'cpu/aud':>7} {'parts':>5} {'dup':>4} {'leak':>4} {'del':>4} {'ins':>4}")
 for result in sorted(s1.glob("results/*.jsonl")):

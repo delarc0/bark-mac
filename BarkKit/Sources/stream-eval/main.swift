@@ -1,3 +1,4 @@
+import CoreML
 import Darwin
 import FluidAudio
 import Foundation
@@ -14,7 +15,10 @@ import WhisperKit
 //            release prompted with the confirmed text.
 //   silero:  decode each segment as Silero v6 closes it (threshold 0.5),
 //            prompted with everything decoded so far; at release decode the
-//            open segment, if there is one.
+//            open segment, if there is one. --cap <s> force-closes an open
+//            segment once it is that long, in the middle of the longest pause
+//            of 60 ms or more in its last 1.5 s (waiting for one up to 2x the
+//            cap), so little audio is left to decode at release.
 // --prompt 0 drops the conditioning on earlier text. WhisperKit 1.1.0 feeds
 // prompt tokens through the decoder one forward pass each (~35 ms per token
 // on KB), so a long prompt costs more than the audio it conditions.
@@ -22,6 +26,7 @@ import WhisperKit
 let usage = """
     usage: stream-eval --mechanism oneshot|confirm|silero [--pause <s>] --model general|swedish
                        --language <code> --clips <dir> --out <file.jsonl> [--suppress-short 1] [--prompt 0]
+                       [--cap <s>] [--encoder gpu|ane]
     """
 
 func fail(_ message: String) -> Never {
@@ -45,6 +50,8 @@ guard let mechanism = args["mechanism"], ["oneshot", "confirm", "silero"].contai
 let pause = Double(args["pause"] ?? "0.5") ?? 0.5
 let suppressShort = args["suppress-short"] == "1"
 let usePrompt = args["prompt"] != "0"
+let cap = Int((Double(args["cap"] ?? "0") ?? 0) * 16_000)
+let encoderCompute: MLComputeUnits = args["encoder"] == "ane" ? .cpuAndNeuralEngine : .cpuAndGPU
 
 let models = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents/huggingface/models")
 let modelFolder = switch model {
@@ -69,7 +76,7 @@ func cpuSeconds() -> Double {
 let kit = try await WhisperKit(WhisperKitConfig(
     model: "openai_whisper-large-v3",
     modelFolder: modelFolder.path,
-    computeOptions: ModelComputeOptions(audioEncoderCompute: .cpuAndGPU, textDecoderCompute: .cpuAndNeuralEngine),
+    computeOptions: ModelComputeOptions(audioEncoderCompute: encoderCompute, textDecoderCompute: .cpuAndNeuralEngine),
     verbose: false,
     logLevel: .error,
     download: false))
@@ -169,6 +176,24 @@ func idle() async {
     return confirmed + [text(try await decode(feed.samples[...], options: tail, prompt: joined(confirmed)))]
 }
 
+/// Middle of the longest run of 10 ms frames under 5% of the window's median
+/// power, if that run lasts 60 ms: a gap between words, not a stop closure.
+func pause(_ samples: [Float], in range: Range<Int>) -> Int? {
+    let frame = 160
+    let power = stride(from: range.lowerBound, to: range.upperBound - frame, by: frame).map { a in
+        samples[a..<(a + frame)].reduce(0) { $0 + $1 * $1 }
+    }
+    guard !power.isEmpty else { return nil }
+    let quiet = power.sorted()[power.count / 2] * 0.05
+    var best = 0..<0, run = 0
+    for (i, p) in power.enumerated() {
+        run = p < quiet ? run + 1 : 0
+        if run > best.count { best = (i + 1 - run)..<(i + 1) }
+    }
+    guard best.count >= 6 else { return nil }
+    return range.lowerBound + (best.lowerBound + best.upperBound) / 2 * frame
+}
+
 @MainActor func silero(_ feed: Feed, vad: VadManager) async throws -> [String] {
     var parts: [String] = []
     var state = await vad.makeStreamState()
@@ -190,6 +215,13 @@ func idle() async {
     while true {
         if feed.samples.count - processed >= VadManager.chunkSize {
             try await step(Array(feed.samples[processed..<(processed + VadManager.chunkSize)]))
+            if cap > 0, let start = openStart, processed - start >= cap {
+                let window = max(start + rate, processed - rate * 3 / 2)..<processed
+                if let cut = pause(feed.samples, in: window) ?? (processed - start >= 2 * cap ? processed : nil) {
+                    closed.append(start..<cut)
+                    openStart = cut
+                }
+            }
         } else if !closed.isEmpty {
             let segment = closed.removeFirst()
             parts.append(text(try await decode(feed.samples[segment], options: shipping, prompt: joined(parts))))
