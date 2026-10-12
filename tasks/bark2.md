@@ -61,27 +61,57 @@ Every problem today's Bark solves must be solved at least as well.
   already-confirmed text, so release-to-paste only covers the last seconds and
   there are no context-free seams. Spike S1 decides the mechanism and must
   show no accuracy loss against one-shot decoding.
-- Live preview (hypothesis): a fast volatile transcript in the notch while
-  speaking, replaced by the final text. Spike S2.
+- Live preview (hypothesis, conditional): a fast volatile transcript in the
+  notch while speaking, replaced by the final text. Spike S2 runs only if S1
+  misses the D3 target.
+- D3 target: release-to-paste p50 under 0.5 s and p95 under 1.0 s for a 10 s
+  dictation on the M5 Pro (today's app is measured first as the baseline).
 - Speech gate: model VAD (Silero) if spike S3 beats the energy gate on both
   hallucinations and quiet voices; otherwise keep energy.
 - Vocabulary (hypothesis): prompt the model with names and terms pulled from
   hq. Spike S6; risk is the model inserting prompt words that were not said.
-- Insertion: AX insert into the focused field first; ⌘V with clipboard restore
-  only as fallback, with the V key resolved from the current keyboard layout.
+- Insertion: ⌘V with clipboard restore stays primary (ConcealedType marker,
+  150 ms restore, never restore if changeCount moved), the V key resolved from
+  the current keyboard layout. AX insert becomes primary per app only after a
+  matrix passes (Slack, Chrome, Notion, Terminal, Teams, Mail, Xcode).
 - Models live in `~/Library/Application Support/Bark/Models`, downloaded with
   checksums. Never `~/Documents`.
 - Swedish model on by default only when the user's languages include Swedish.
 
 ### Meetings
-- Capture: Core Audio process tap on the call app (system audio = Them) plus
-  the mic (= Me), two streams, never mixed. Echo cancellation on the mic for
-  laptop speakers (spike S4).
-- Transcription: same engines, run per stream; Swedish routing per segment.
-- Speakers: Them split by diarization in a final pass (spike S5 picks SpeakerKit
-  or FluidAudio); names from calendar attendees, confirmed by the user.
-- Detect and offer: Bark notices a call (calendar event from hq plus a call app
-  producing audio) and offers to record with one click. Never auto-records.
+- Three modes (proposed, Erik to confirm in-person scope):
+  - call: Core Audio process tap on the call app (system audio = Them) plus
+    the mic (= Me), two streams, never mixed;
+  - in person: mic only, diarization on the mic stream, no Me/Them;
+  - hybrid (room plus remote): both streams diarized, Me = dominant mic
+    speaker, confirmed by the user.
+- Echo cancellation on the mic for laptop speakers (spike S4).
+- Transcription: final-quality decode of VAD-closed segments DURING the
+  meeting (the S1 mechanism), so stop is near-instant and there is no second
+  pass. No volatile live pass for meetings.
+- Language is explicit when the meeting is armed (default: last meeting, later
+  the client's language from hq); Auto is a choice, not the default. This uses
+  the routing rule's explicit-language branch, so short segments of a Swedish
+  meeting still go to KB.
+- Speakers: diarization (spike S5 picks SpeakerKit or FluidAudio); names from
+  calendar attendees once P3 exists, confirmed by the user.
+- Detect and offer: in P2 on the audio signal alone (a known call app or a
+  browser holds the mic); P3 adds calendar enrichment. Call-app list named in
+  code; tapping a browser captures every tab, and the UI says so. Never
+  auto-records.
+- Durability (losing a client meeting is the worst failure):
+  - audio appended to disk per stream as captured, never held in RAM;
+  - segments committed to SQLite as they are decoded;
+  - an unfinished meeting found on relaunch is offered to finish;
+  - a power assertion is held while recording; on wake, capture is rebuilt
+    and a gap marker written;
+  - the push to hq is a durable queue; the local record stays until hq
+    acknowledges; deleting a meeting in hq deletes it on the Mac.
+  Each of these is a test.
+- Budget (spike S7): a 90-minute two-stream meeting on the M5 Pro and on the
+  slowest team Mac, on battery. Targets: final transcript within 2 minutes of
+  stop, app responsive throughout; ANE/CPU load, thermal state, battery drain
+  and peak memory recorded.
 - Notepad: the user's own notes during the call, kept apart from agent output.
   UI decided on rendered mockups with Erik before building.
 - Store: SQLite on the Mac (meetings, segments, speakers, notes). Audio kept
@@ -104,6 +134,9 @@ Every problem today's Bark solves must be solved at least as well.
 
 Each one bit Bark once. Each gets a test or an eval case.
 - Clips under 1 s decode empty unless `windowClipTime = 0`.
+- `firstTokenLogProbThreshold` (WhisperKit-only default -1.5) ends the decode
+  at zero tokens when the first word is uncertain (a name), so the result is
+  empty. Set it to nil. Found by S0: 2 of 60 sv clips empty on large-v3.
 - `DecodingOptions.detectLanguage` misdetects; use the dedicated detection API.
 - Whisper says "Thank you." on silence at noSpeechProb 0.00.
 - Warmup must decode real silence and bypass the speech gate.
@@ -113,42 +146,100 @@ Each one bit Bark once. Each gets a test or an eval case.
 - Event taps get disabled by the system and must be re-enabled.
 - ANE decoder wedges on M1 and M2 Max; warmup under a timeout, self-heal to CPU+GPU.
 - First KB load is a ~239 s one-time compile; needs progress and precompile.
-- Capitalisation must not fire after abbreviations (bl.a., t.ex., e.g.).
+- Capitalisation must not fire after abbreviations (bl.a., t.ex., e.g.); this
+  is a live bug in today's app.
+- A key release can be swallowed (screen lock, secure input, a disabled tap):
+  hard stop at the max duration, re-check key state when the tap re-enables.
+- Holds under 200 ms are accidental taps.
+- A revoked mic grant feeds digital silence (dead input, explain it); a
+  Bluetooth device with zero callbacks is transient (retry), not dead.
+- Right Option is isolated from left by the device-specific flag mask.
+- Clipboard: wait 150 ms before restoring (Electron), never restore if the
+  changeCount moved, mark dictation with org.nspasteboard.ConcealedType or
+  clipboard managers archive it to disk.
+- The mic grant is requested on the first press, and a still-held press starts
+  once granted.
+- A sample-rate change mid-capture restarts capture instead of pitch-shifting.
+- Every decode runs under a timeout; a hung task is orphaned, the app recovers.
+- Package.resolved is committed so transitive dependencies cannot float.
 
 ## Evaluation harness (built first, gates everything)
 
-- `bark-eval` CLI on the real shipping engine (CoreML, not whisper.cpp):
-  FLEURS test sv and en (cached locally), WER with Whisper normalisation,
-  latency per clip, run on the M5 Pro.
+- `bark-eval` CLI on the real shipping engine (CoreML, not whisper.cpp),
+  run on the M5 Pro. Two modes: engine-only, and whole pipeline through
+  BarkKit exactly as the app calls it (speech gate, trim, routing,
+  post-processing).
 - Baseline first: today's July numbers came from whisper.cpp; the CoreML
-  engine's FLEURS WER has never been measured.
-- Later: Erik's own dictation clips and consented meetings, kept local, never
-  committed.
-- Gate: no model, dependency or decoding change merges if sv or en WER rises.
+  engine's FLEURS WER has never been measured. S0 starts on 60 clips per
+  language; the gate uses the full FLEURS test split for both languages.
+- Sets, each with its own metric:
+  - FLEURS sv and en: WER, Whisper normalisation;
+  - silence and noise: hallucinated words must be 0;
+  - sub-1 s and 1 to 3 s clips: empty-result rate;
+  - mixed sv/en: KB-on-English routes must be 0, language-ID accuracy;
+  - Erik's term list (from his clips): term recall;
+  - dictation timing: release-to-paste p50/p95.
+- A committed baseline JSON per model and set. Scoring exits non-zero on WER
+  up 0.3 absolute, or any hallucination or routing regression. Results are
+  recorded in the commit body and on the hq task.
+- Erik's own clips and consented meetings stay local, never committed.
+- Engine tests run when models are on disk and are skipped otherwise; they do
+  not pretend to run in CI.
 
 ## Phases
 
-- P0 Spikes, each a measured answer written into this file:
-  - S0 baseline WER + latency of both models on WhisperKit CoreML.
-  - S1 streaming with confirmed-text conditioning: WER vs one-shot, release-to-paste.
-  - S2 SpeechAnalyzer Swedish as live preview: availability, lag, quality.
-  - S3 Silero VAD vs energy gate: hallucinations on silence/noise, quiet speech kept.
-  - S4 process tap + echo cancellation on laptop speakers.
-  - S5 diarization on multi-speaker Swedish audio (public Riksdag debate audio).
+- P0 Spikes, each a measured answer written into this file. Order:
+  - S0 baseline WER + latency on WhisperKit CoreML, plus Parakeet v3 (via
+    FluidAudio) on the same clips and normaliser, so the model choice rests
+    on one measurement.
+  - S3 Silero VAD vs energy gate: hallucinations on silence/noise, quiet
+    speech kept. Before S1, because S1's segment boundaries depend on it.
+  - S1 and S4 in parallel:
+    - S1 streaming with confirmed-text conditioning (argmax 1.1.0 has
+      promptTokens, prefixTokens and AudioStreamTranscriber confirmed
+      segments): WER vs one-shot must not rise; release-to-paste vs D3.
+    - S4 process tap, pass criteria named up front: per-process vs global tap
+      with Bark excluded; permission UX and how a denial is told apart from
+      the known all-zero-buffer bug on macOS 26/27; AEC on vs off as Me-stream
+      WER and bleed rate (share of Them words in the Me transcript) on laptop
+      speakers; AirPods (HFP) vs wired Me-stream WER.
+  - S5 diarization: needs a mic-only multi-speaker recording (in-person
+    crosstalk, room acoustics) as well as a call; blocked on Erik's
+    recordings.
   - S6 vocabulary prompting on KB: gain on terms vs inserted false words.
-- P1 Dictation core: BarkKit + app shell, parity with every D-problem, eval gate.
-- P2 Meetings: capture, transcription, speakers, store, notepad, detect-and-offer.
-- P3 hq: API, MCP tools, agent pass (after the hq target is chosen).
-- P4 Release as Bark 1.0 (Erik's go).
+  - S7 long-meeting budget (see Meetings).
+  - S2 SpeechAnalyzer Swedish preview: only if S1 misses D3.
+- P1 Dictation core: BarkKit + app shell, parity with every D-problem, eval
+  gate. Gate: our KB-Whisper conversion is published (otherwise Swedish users
+  get the general model).
+- P2 Meetings: capture, transcription, speakers, durable store, notepad,
+  detect-and-offer on audio.
+- P3 hq: API, MCP tools, agent pass, calendar enrichment (after the hq target
+  is chosen; verify hq can read each teammate's calendar, not only Erik's).
+- P4 Release as Bark 1.0 over 0.2.3 (Erik's go). Checklist:
+  - appcast item carries sparkle:minimumSystemVersion 26.0, so 0.2.3 installs
+    on macOS 14/15 are not offered a build that will not launch;
+  - CURRENT_PROJECT_VERSION above 5;
+  - settings in the shared UserDefaults domain: hotkey, device UID and
+    language migrate, everything else resets (stated in release notes);
+  - models moved from ~/Documents/huggingface to Application Support, not
+    re-downloaded and recompiled;
+  - release only from main with a tag (release.sh gets a branch guard).
 
 ## What needs Erik
 
 - About 30 minutes of his own Swedish/English dictation clips for the eval set.
 - Two or three meetings recorded with consent, for diarization and real-world WER.
 - Go to publish our KB-Whisper conversion (Apache 2.0, NOTICE crediting KBLab).
+  Gates P1.
 - Which hq receives meetings.
 - Mockup approvals: notch preview, notepad, meeting view.
-- Audio retention period for meetings.
+- Audio retention period for meetings. Proposed default so the build does not
+  wait: audio 30 days, transcripts kept.
+- Notice practice when recording clients (a line in the invite, or said at
+  the start). A decision, not a feature.
+- Whether in-person and hybrid meetings are in scope (proposed: yes).
+- The team's Macs (chip, macOS version) for the S7 budget run.
 
 ## S0 result (2026-10-12)
 
