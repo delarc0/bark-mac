@@ -302,3 +302,29 @@ Other observations:
 - KB loaded in 13.8 s here, not the 239 s first compile: the CoreML compile
   cache on this Mac was already warm. KB warmup (3 s of silence) took
   5.5-11.6 s against 0.5 s for large-v3; the app only warms the general model.
+
+## S0c result (2026-10-12): is our KB conversion worse than the reference?
+
+No. KBLab's own GGML (`ggml-model.bin` from the KBLab/kb-whisper-large repo,
+fp16, kept in `~/Library/Application Support/Bark/eval/models/`) on whisper.cpp
+1.9.1 (`BarkKit/eval/whispercpp.sh`, language pinned) against the same 60 sv
+clips and the same normaliser:
+
+| engine | model | decoding | sv WER |
+|--------|-------|----------|--------|
+| whisper.cpp | KBLab GGML | beam 5 (whisper-cli default, as July) | 5.97% |
+| whisper.cpp | KBLab GGML | greedy (`-bs 1`) | 6.12% |
+| CoreML (bark-eval) | our conversion | greedy, shipping config | **5.97%** |
+| whisper.cpp | ggml-large-v3 | beam 5 | 8.91% |
+| whisper.cpp | ggml-large-v3 | greedy | 9.38% |
+| CoreML (bark-eval) | large-v3 | greedy, shipping config | **9.07%** |
+
+- Greedy against greedy, 56 of 60 KB transcripts are identical to whisper.cpp
+  after normalisation; the other 4 differ by a word (a numeral spelled out, a
+  dropped "det", "nothen"/"nothern"). The conversion is faithful.
+- Beam search is worth about 0.15 to 0.5 points on these clips. WhisperKit has
+  no beam search, and greedy CoreML already equals beam-5 whisper.cpp on KB.
+- July's 4.56% came from a different selection of clips, not a better engine.
+  Every number from here on is on the fixed id list, so July's figures are no
+  longer the reference.
+- Nothing was reconverted.
