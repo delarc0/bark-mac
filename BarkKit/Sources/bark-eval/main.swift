@@ -76,6 +76,10 @@ options.windowClipTime = 0
 // zero tokens when the first word, typically a name, is uncertain.
 options.firstTokenLogProbThreshold = nil
 options.language = language
+// Long-dictation candidates: without timestamps a 30 s window can end early and
+// the seek jumps to the next window, dropping everything in between.
+if args["timestamps"] == "1" { options.withoutTimestamps = false }
+if args["chunking"] == "vad" { options.chunkingStrategy = .vad }
 
 let warmStart = clock.now
 _ = try await kit.transcribe(audioArray: [Float](repeating: 0, count: 48_000), decodeOptions: options)

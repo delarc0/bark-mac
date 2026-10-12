@@ -511,3 +511,61 @@ gate.**
 - (1) once leaked a literal "<|" as text. P1's text clean-up must strip it.
 - Not measured as a separate run: the sub-1 s-only scope. Full-length
   behaviour is unchanged by construction, because the filter is set per call.
+
+## S1 result (2026-10-12): streaming under a real-time feed
+
+`BarkKit/Sources/stream-eval`, `BarkKit/eval/s1.sh`, `s1_score.py`. Each clip
+fed in 100 ms blocks at wall-clock pace; release = last block in. dict = one
+FLEURS clip released 0.3 s after its last word (60 per language); long = 4
+consecutive clips joined (30 to 60 s, 15 per language). sv runs KB, en runs
+large-v3; Bark's S1b short-clip fix on.
+
+| set | mechanism | WER | release-to-final p50 / p95 | decoder busy per audio s |
+|-----|-----------|-----|----------------------------|--------------------------|
+| dict-en | one-shot (today) | 4.71% | 1.33 / 1.80 s | 0.12 |
+| dict-en | confirm loop | 5.27% | 1.79 / 3.25 s | 0.86 |
+| dict-en | Silero 0.5 s pause, no prompt | 4.71% | 1.13 / 1.91 s | 0.13 |
+| dict-sv | one-shot (today) | 5.97% | 2.03 / 2.71 s | 0.18 |
+| dict-sv | confirm loop | 6.20% | 2.71 / 4.64 s | 1.06 |
+| dict-sv | Silero 0.5 s pause, no prompt | 5.89% | 1.73 / 2.75 s | 0.18 |
+| long-en | one-shot (today) | **29.42%** | 3.77 / 4.87 s | 0.09 |
+| long-en | Silero 0.5 s pause, no prompt | 22.19% | 1.58 / 2.95 s | 0.11 |
+| long-sv | one-shot (today) | **17.05%** | 5.86 / 9.08 s | 0.15 |
+| long-sv | Silero 0.5 s pause, no prompt | 9.15% | 2.74 / 4.77 s | 0.17 |
+
+Full table (Silero 0.25 s, prompted variants): run `s1_score.py`.
+
+- Prompting each segment with earlier text did not improve accuracy and
+  made long dictations 2 to 2.5x slower at release (prompt tokens cost a
+  decoder pass each). Dropped.
+- The confirm loop (AudioStreamTranscriber style) keeps the decoder busy
+  nonstop and is the slowest at release. Rejected.
+- Silero segmentation without prompts is the winner, but only ~15% faster at
+  release on normal dictations: read speech rarely pauses 0.5 s, so most of
+  the utterance is still open at release.
+- **D3 (p50 < 0.5 s) is not reachable with KB-large on this engine.** One
+  decode of 1 s of audio costs ~0.5 s (July spike), so that is the floor.
+  New D3 proposal: p50 < 1.0 s, p95 < 1.5 s for a 10 s dictation. Getting
+  there needs a short open tail at release: force-close segments at a
+  shorter pause or a length cap, measured next.
+- The long-set deletions in every mechanism came from one bug, below.
+
+## S1c result (2026-10-12): long dictations drop speech (shipping bug)
+
+One-shot on 30 to 60 s dictations deleted 355 words (en) and 155 (sv): with
+`withoutTimestamps = true`, WhisperKit can end a 30 s window early and seek
+to the next window, skipping the speech in between (a 34 s clip returned 26
+of 80 words). `bark-eval --timestamps 1 | --chunking vad`:
+
+| set | today | timestamps | VAD chunking | both |
+|-----|-------|-----------|--------------|------|
+| long-en | 29.42% | **7.72%** | 12.29% | 11.52% |
+| long-sv | 17.05% | 7.21% | 8.14% | **6.59%** |
+| dict-en | 4.71% | 5.97% | | 5.97% |
+| dict-sv | 5.97% | 6.67% | | 6.59% |
+
+Timestamps fix long audio but cost ~1 point within one window. Rule: timestamps
+on only when the audio exceeds 30 s. Shipped to today's Bark as d652c62
+(p0-argmax-oss, built, not installed). Bark2: segments are VAD-closed and
+capped under 30 s, so every decode stays inside one window; the rule stays
+as a guard and as an eval case.

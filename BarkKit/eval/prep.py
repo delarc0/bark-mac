@@ -71,6 +71,18 @@ def speech_onset(audio):
     return max(0, int(np.argmax(rms > 0.1 * rms.max())) - 10) * 160
 
 
+def speech_end(audio, margin=0.3):
+    # Push-to-talk releases soon after the last word; FLEURS keeps a median
+    # 0.8 s of trailing silence, which would flatter any streaming mechanism.
+    rms = frame_rms(audio)
+    last = len(rms) - 1 - int(np.argmax((rms > 0.05 * rms.max())[::-1]))
+    return min(len(audio), (last + 1) * 160 + int(margin * RATE))
+
+
+def speech_span(audio, margin=0.3):
+    return audio[max(0, speech_onset(audio) + 10 * 160 - int(margin * RATE)) : speech_end(audio, margin)]
+
+
 def peak_normalised(audio, peak_dbfs=-6.0):
     return audio * (10 ** (peak_dbfs / 20) / np.abs(audio).max())
 
@@ -112,7 +124,8 @@ def noise_set(rng):
 
 
 for lang in LANGS:
-    names = [f"fleurs-{lang}", f"short08-{lang}", f"short25-{lang}"] + [f"level{db}-{lang}" for db in (0, 20, 30)]
+    names = [f"fleurs-{lang}", f"short08-{lang}", f"short25-{lang}", f"dict-{lang}", f"long-{lang}"]
+    names += [f"level{db}-{lang}" for db in (0, 20, 30)]
     if not any(todo(name) for name in names):
         continue
     clips, refs = fleurs(lang)
@@ -121,6 +134,15 @@ for lang in LANGS:
     for name, seconds in ((f"short08-{lang}", 0.8), (f"short25-{lang}", 2.5)):
         if todo(name):
             write_set(name, [(i, a[speech_onset(a) :][: int(seconds * RATE)]) for i, a in clips])
+    # S1 dictation sets: each clip released 0.3 s after its last word, and runs
+    # of 4 consecutive clips joined with 0.6 s of their own silence (30-60 s).
+    if todo(f"dict-{lang}"):
+        write_set(f"dict-{lang}", [(i, a[: speech_end(a)]) for i, a in clips], refs)
+    if todo(f"long-{lang}"):
+        groups = [range(k, k + 4) for k in range(0, len(clips), 4)]
+        write_set(f"long-{lang}",
+                  [(clips[g[0]][0], np.concatenate([speech_span(clips[k][1]) for k in g])) for g in groups],
+                  [{"id": clips[g[0]][0], "reference": " ".join(refs[k]["reference"] for k in g)} for g in groups])
     # S3 speech levels: every clip at -6 dBFS peak (a well-gained mic), then
     # 20 and 30 dB quieter for soft voices.
     for db in (0, 20, 30):
