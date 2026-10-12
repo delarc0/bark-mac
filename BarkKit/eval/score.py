@@ -4,7 +4,7 @@
 # ///
 """Scores <eval dir>/results/<set>-<model>.jsonl and gates against baseline.json.
 
-usage: score.py <eval dir> [--write-baseline]
+usage: score.py <eval dir> [--write-baseline | --table-only]
 
 Exit 1 on: a missing or resized run, WER up 0.3 points absolute, more empty
 results, or hallucinated words on a set whose baseline has none. Engine-only
@@ -106,6 +106,8 @@ if __name__ == "__main__":
     self_test()
     current = score(Path(sys.argv[1]))
     print(table(current))
+    if "--table-only" in sys.argv:
+        sys.exit(0)
     if "--write-baseline" in sys.argv:
         BASELINE.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n")
         print(f"wrote {BASELINE}")

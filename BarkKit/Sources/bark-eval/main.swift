@@ -5,7 +5,7 @@ import WhisperKit
 // writes one JSON line per clip. Deliberately skips Bark's silence trimming:
 // this measures the raw engine.
 
-let usage = "usage: bark-eval --model general|swedish --language <code> --clips <dir> --out <file.jsonl>"
+let usage = "usage: bark-eval --model general|swedish --language <code> --clips <dir> --out <file.jsonl> [--suppress-nospeech 1]"
 
 var args: [String: String] = [:]
 var argv = CommandLine.arguments.dropFirst()
@@ -57,6 +57,13 @@ let kit = try await WhisperKit(WhisperKitConfig(
     logLevel: .error,
     download: false))
 log("loaded \(model) in \(String(format: "%.1f", seconds(clock.now - loadStart)))s")
+
+// Spike S1b: KB answers sub-1 s Swedish with its no-speech token. Off by default.
+if args["suppress-nospeech"] == "1", let tokenizer = kit.tokenizer {
+    kit.textDecoder.logitsFilters = (kit.textDecoder.logitsFilters ?? [])
+        + [SuppressTokensFilter(suppressTokens: [tokenizer.specialTokens.noSpeechToken])]
+    log("suppressing no-speech token \(tokenizer.specialTokens.noSpeechToken)")
+}
 
 // Same as Transcriber.makeDecodingOptions(). NEVER set detectLanguage.
 var options = DecodingOptions()

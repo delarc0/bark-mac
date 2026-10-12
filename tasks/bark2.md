@@ -472,3 +472,42 @@ attenuated clean recordings), music, TV or other voices (any VAD passes
 those), breath and mouth noise. Eval data stays outside git; Silero adds a
 FluidAudio dependency to the app, which today is eval-only, so the switch is
 P1 work behind the gate.
+
+## S1b result (2026-10-12): KB drops sub-1 s Swedish
+
+`BarkKit/eval/s1b.sh`. Fix (1): suppress KB's `<|nospeech|>` token with a
+`SuppressTokensFilter` on `textDecoder.logitsFilters`
+(`bark-eval --suppress-nospeech 1`). `DecodingOptions.suppressTokens` cannot
+do it: 1.1.0 drops special tokens from that list. Fix (2): send sub-1 s audio
+to large-v3 with language sv.
+
+| set | KB today | (1) KB, no-speech suppressed | (2) large-v3 sv |
+|-----|----------|------------------------------|-----------------|
+| short08-sv empty | 16 of 60 | **4** | 1 |
+| short25-sv empty | 0 | 0 | 0 |
+| fleurs-sv WER | 5.97% | 6.12% | 5.97% (unchanged: no clip is under 1 s) |
+| noise, no gate: hallucinated words | 0 | 7 ("Tack." on digital silence, "Musik" on loud clicks) | 15 (S0, en route) |
+| noise behind Silero 0.5 (S3) | 0 | 0 | 0 |
+
+What the 16 formerly empty clips now say (reference start, then (1), then (2)):
+- "Det kan också vara": "Det kan" / "Det är ju".
+- "På vissa rutter har": "På vissa rutter" / "På vis och rött."
+- "Rör ihop de två": "" / "Tack till elever och personal vid Värmlands
+  universitet."
+- "Segregation och rekombination": "" / "Tack!"
+- "Kongressen anslog medel": "<|" / "-".
+
+**Recommendation: (1), applied only to audio under 1 s, behind the Silero
+gate.**
+- Option (1) recovers 12 of the 16 clips with words that are actually in the
+  audio. Where it is unsure, it returns nothing.
+- Option (2) empties fewer clips but invents whole sentences on two of them
+  ("Tack till elever och personal vid Värmlands universitet."). That is the
+  D4 failure we exist to prevent.
+- Scoping (1) to sub-1 s audio keeps full-length Swedish at 5.97%. Without
+  that scope it costs 0.15 points and gives up KB's clean record on noise.
+- The behind-the-gate scope means the "Tack." risk only reaches the decoder
+  when Silero passes a non-speech blip shorter than 1 s.
+- (1) once leaked a literal "<|" as text. P1's text clean-up must strip it.
+- Not measured as a separate run: the sub-1 s-only scope. Full-length
+  behaviour is unchanged by construction, because the filter is set per call.
