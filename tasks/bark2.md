@@ -408,3 +408,67 @@ Engine-only baseline:
   "any hallucination fails" rule.
 - Full FLEURS test split (the PRD's gate size) and the pipeline mode are not
   built yet; the pipeline mode needs BarkKit's pipeline.
+
+## S3 result (2026-10-12): Silero VAD vs the energy gate
+
+`BarkKit/eval/s3.sh` puts a gate in front of the shipping decoder on each
+route (sv clips to KB, en clips to large-v3), then `s3_score.py`. Gates:
+- `energy`: today's `trimSilence`, ported verbatim (10 ms frames, RMS above
+  0.01, 100 ms margin);
+- `silero85` and `silero50`: FluidAudio 0.17.7 Silero v6 (`VadManager`,
+  default segmentation, 0.1 s padding) at FluidAudio's default threshold 0.85
+  and Silero's own default 0.5. Audio is trimmed from the first speech segment
+  to the last;
+- `none`: no gate.
+
+Speech sets are the 60 FLEURS clips per language, each peak-normalised to
+-6 dBFS (a well-gained mic) and then attenuated by 20 and 30 dB for soft
+voices. A rejected clip is one the gate never hands to the decoder; WER is
+over the clips that pass.
+
+| speech | gate | sv rejected | sv WER | en rejected | en WER |
+|--------|------|-------------|--------|-------------|--------|
+| -6 dBFS peak | none | 0 | 6.05% | 0 | 4.42% |
+| | energy | 0 | 5.89% | 0 | 4.85% |
+| | silero 0.85 | 0 | 5.89% | 0 | 4.49% |
+| | silero 0.5 | 0 | **5.74%** | 0 | 4.49% |
+| -26 dBFS peak | none | 0 | 6.67% | 0 | 4.63% |
+| | energy | 0 | 22.25% | 1 | 17.20% |
+| | silero 0.85 | 0 | 6.28% | 0 | 5.55% |
+| | silero 0.5 | 0 | **6.28%** | 0 | **4.92%** |
+| -36 dBFS peak | none | 0 | 6.51% | 0 | 4.99% |
+| | energy | **57 of 60** | 100% on the 3 | **60 of 60** | - |
+| | silero 0.85 | 0 | 6.28% | 0 | 4.99% |
+| | silero 0.5 | 0 | 6.43% | 0 | 4.85% |
+
+| noise set (28 clips) | clips passed | hallucinated words, large-v3 | KB |
+|----------------------|--------------|------------------------------|----|
+| none | 28 | 15 | 0 |
+| energy | 8 | 9 ("Thank you." twice on fan, "you" on clicks) | 0 |
+| silero 0.85 | 0 | 0 | 0 |
+| silero 0.5 | 0 | 0 | 0 |
+
+- The energy gate fails both ways. A soft voice 20 dB down keeps its words
+  but loses onsets and tails (kept audio falls from ~655 s to ~480 s), so WER
+  triples to quadruples. At 30 dB down it rejects nearly everything. The gate
+  lets fan at -35 dBFS and loud key clicks through, and large-v3 answers with
+  "Thank you." and "you".
+- Silero rejects every noise clip at both thresholds and no speech clip at any
+  level. Its WER stays within 0.5 points of no gate at every level (-6 dBFS:
+  5.74% sv, 4.49% en).
+- At -6 dBFS the energy gate trims 5 to 6% of the audio, Silero 0.5 about
+  11%, and neither costs words. FLEURS en as recorded peaks around -34 dBFS,
+  and at that level today's energy gate rejects 30 of the 60 clips before any
+  attenuation.
+- Cost: Silero gated all 60 clips (706 s of audio) in 0.59 s wall time,
+  including its model load. The energy gate took 0.08 s.
+
+**Recommendation: replace the energy gate with Silero v6 at threshold 0.5.**
+It matches or beats 0.85 everywhere, keeps more audio, and is the measurably
+better one at -26 dBFS en (4.92% vs 5.55%).
+
+Not covered: real-mic noise floors under quiet speech (these clips are
+attenuated clean recordings), music, TV or other voices (any VAD passes
+those), breath and mouth noise. Eval data stays outside git; Silero adds a
+FluidAudio dependency to the app, which today is eval-only, so the switch is
+P1 work behind the gate.
