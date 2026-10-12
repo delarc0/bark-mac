@@ -65,6 +65,9 @@ options.usePrefillPrompt = true
 options.skipSpecialTokens = true
 options.withoutTimestamps = true
 options.windowClipTime = 0
+// Shipping fix 74446f7: the WhisperKit-only default (-1.5) ends the decode at
+// zero tokens when the first word, typically a name, is uncertain.
+options.firstTokenLogProbThreshold = nil
 options.language = language
 
 let warmStart = clock.now

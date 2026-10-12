@@ -246,7 +246,8 @@ Each one bit Bark once. Each gets a test or an eval case.
 Harness: `BarkKit/eval/run.sh` (prep, release build of `bark-eval`, matrix,
 score). Engine config identical to shipping `Transcriber` (argmax-oss-swift
 1.1.0, encoder cpuAndGPU, decoder cpuAndNeuralEngine, prefill on, language
-pinned, windowClipTime 0, no detectLanguage), no silence trimming. FLEURS test,
+pinned, windowClipTime 0, no detectLanguage, firstTokenLogProbThreshold nil
+as in shipping fix 74446f7), no silence trimming. FLEURS test,
 first 60 sentence ids per language after sorting by id (one recording per id,
 first in file order). Both languages use ids 1660-1719; the list is in
 `~/Library/Application Support/Bark/eval/fleurs/{sv,en}/ids.txt`. WER is
@@ -257,16 +258,20 @@ own temperature-fallback retries.
 
 | clips | model | WER | decode median | decode p90 | RTF |
 |-------|-------|-----|---------------|------------|-----|
-| sv | kb-whisper-large | **5.97%** | 1.98 s | 2.63 s | 0.181 |
-| sv | whisper-large-v3 | 12.02% | 1.83 s | 2.54 s | 0.166 |
-| en | whisper-large-v3 | **4.71%** | 1.31 s | 1.69 s | 0.117 |
-| en | kb-whisper-large | 56.32% | 1.68 s | 2.79 s | 0.170 |
+| sv | kb-whisper-large | **5.97%** | 2.00 s | 2.62 s | 0.173 |
+| sv | whisper-large-v3 | 9.07% | 1.86 s | 2.47 s | 0.162 |
+| en | whisper-large-v3 | **4.71%** | 1.34 s | 1.72 s | 0.119 |
+| en | kb-whisper-large | 56.25% | 1.68 s | 2.48 s | 0.160 |
+
+No empty outputs. Before the fix (WhisperKit default threshold -1.5) the same
+run gave KB sv 5.97%, large-v3 sv 12.02%, large-v3 en 4.71%, KB en 56.32%.
 
 July (whisper.cpp, different 60-clip selection): KB sv 4.56%, large-v3 sv
 8.43%, large-v3 en 4.08%, KB en 40.85%.
 
-**Does the CoreML engine match whisper.cpp? Not as shipped.** The models are
-fine; one WhisperKit default is not:
+**Does the CoreML engine match whisper.cpp? Not with WhisperKit's defaults;
+yes for large-v3 once the threshold is off.** The models were fine; one
+WhisperKit default was not:
 
 - `DecodingOptions.firstTokenLogProbThreshold` defaults to -1.5 (WhisperKit
   only; whisper.cpp and openai-whisper have no such rule). When the first word
@@ -278,16 +283,15 @@ fine; one WhisperKit default is not:
   Shipping Bark has the same default, so a dictation that starts with a name
   can silently paste nothing. `suppressBlank` does not help; disabling prefill
   does, but only because it changes the prompt path.
-- Same harness with only `firstTokenLogProbThreshold = nil` (scratch run, not
-  committed): KB sv 5.97%, large-v3 sv **9.07%**, large-v3 en 4.71%, KB en
-  56.25%, no empty outputs.
+- With `firstTokenLogProbThreshold = nil` (the table above) large-v3 sv drops
+  from 12.02% to 9.07% and nothing rises.
 - whisper.cpp (`whisper-cli` defaults, beam 5, `ggml-large-v3`, language
   pinned) on these exact 60 clips: large-v3 sv **8.91%**, en **4.63%**. So
   with the threshold off, CoreML large-v3 is within 0.2 points of whisper.cpp.
   The gap to July's 8.43% / 4.08% is the clip selection, not the engine.
 - KB sv 5.97% vs July's 4.56% is not settled: the KB GGML used in July is no
   longer on disk, so whisper.cpp KB could not be rerun on these clips. The
-  large-v3 clip-set shift (+0.5 sv) explains only part of it.
+  large-v3 clip-set shift (+0.5 sv) explains only part of it. See S0c.
 
 Other observations:
 - KB on English: 30 of 60 clips came back as Swedish text, 2 empty. The
@@ -298,7 +302,3 @@ Other observations:
 - KB loaded in 13.8 s here, not the 239 s first compile: the CoreML compile
   cache on this Mac was already warm. KB warmup (3 s of silence) took
   5.5-11.6 s against 0.5 s for large-v3; the app only warms the general model.
-
-Next: decide `firstTokenLogProbThreshold = nil` for Bark2 (it passes the gate:
-sv large-v3 -2.95 points, nothing rises) and rerun KB on whisper.cpp if the
-4.56% vs 5.97% question matters.
