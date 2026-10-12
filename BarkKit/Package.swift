@@ -8,6 +8,8 @@ let package = Package(
         .package(url: "https://github.com/argmaxinc/argmax-oss-swift", exact: "1.1.0"),
         // Eval-only for now (Parakeet, Silero); P1 brings it into the app for the Silero gate.
         .package(url: "https://github.com/FluidInference/FluidAudio", exact: "0.17.7"),
+        // Spike S8: the MLX Whisper engine (eval/mlx.sh).
+        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.32.3"),
     ],
     targets: [
         .executableTarget(
@@ -24,6 +26,15 @@ let package = Package(
         .executableTarget(
             name: "fluid-eval",
             dependencies: [.product(name: "FluidAudio", package: "FluidAudio")]
+        ),
+        .executableTarget(
+            name: "mlx-eval",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                // The vendored swift-transformers tokenizer (AutoTokenizerWrapper) and the WAV loader.
+                .product(name: "WhisperKit", package: "argmax-oss-swift"),
+            ]
         ),
     ]
 )

@@ -654,3 +654,92 @@ Whisper decoder (mlx-swift; mlx-audio-swift as reference, not a dependency)
 that owns the decode policy above and must reproduce these numbers. Costs to
 measure there: GPU instead of ANE (power, and S7's 90-minute budget), model
 memory (fp16 KB 3.1 GB; try 8-bit), load and first-decode time.
+
+## S8 result (2026-10-12): Swift MLX engine
+
+`BarkKit/Sources/mlx-eval` is a small Swift port of mlx_whisper 0.4.3 on
+mlx-swift 0.32.3: log-mel, encoder, decoder with KV cache, greedy decode with
+the fallback ladder, and the S1e no-speech policy. It does no language
+detection. `BarkKit/eval/mlx.sh` runs run.sh's matrix into
+`eval/mlx/results` and scores it. Python is the S1e proof: the `nsa` policy
+runs where they exist (noise/KB, short25-sv/KB, fleurs-sv/KB), otherwise the
+no-policy runs. Medians are on this M5 Pro.
+
+| set/model | Swift WER | Python WER | same transcript | median Swift / Python |
+|-----------|-----------|------------|-----------------|-----------------------|
+| fleurs-sv/swedish | 5.80% | 5.80% (5.66% incl. 1716) | 59/59 | 0.63 / 0.66 s |
+| fleurs-sv/general | 9.35% | 9.35% (9.38%) | 59/59 | 0.62 / 0.66 s |
+| fleurs-en/general | 4.56% | 4.56% | 59/60 | 0.48 / 0.52 s |
+| fleurs-en/swedish (canary) | 63.97% | 63.83% | 57/60 | 0.54 / 0.58 s |
+| noise/swedish | 28/28 empty | 28/28 empty | 28/28 | 0.19 / 0.21 s |
+| noise/general | 0 empty, 40 words | 0 empty, 40 words | 28/28 | 0.19 / 0.22 s |
+| short08-sv/swedish | 0 empty | 0 empty | 58/60 | 0.22 / 0.25 s |
+| short08-en/general | 5 empty | 5 empty | 58/60 | 0.21 / 0.24 s |
+| short25-sv/swedish | 0 empty | 0 empty | 59/60 | 0.30 / 0.33 s |
+| short25-en/general | 0 empty | 0 empty | 59/60 | 0.27 / 0.30 s |
+
+- Overall, 524 of 534 transcripts are byte-identical. 4 of the 10 that differ
+  are short08 clips decoded at a fallback temperature, which is random
+  sampling and so differs on every run (in the first run, short08-sv 1664 came
+  back empty). The other 6 are greedy fp16 drift: Python ran MLX core 0.31.1
+  and mlx-swift 0.32.3 bundles core 0.32.2. Example: fleurs-en 1712, "Bengal
+  tigers" vs "Bengal Tigers". fleurs-sv has no differing clips.
+- Python timing includes ffmpeg loading the file. Swift times from samples in
+  memory to text. Swift is 4 to 8% faster on the median.
+- Load, after the weights are in the page cache: 0.4 to 0.8 s. The first load
+  of the session took 2.0 s. First decode (a FLEURS clip, right after load):
+  0.5 to 0.7 s, so warm-up costs nothing beyond one decode. The very first run
+  after the build took 3.8 s (Metal shader cache). Memory (MLX
+  `Memory.peakMemory`): fp16 KB or large-v3 is 3.09 GB active after load and
+  4.03 GB peak while decoding.
+- Bonus, 8-bit KB (MLX affine quantize, group 64, Linear and Embedding layers,
+  conv stays fp16; quantized once in Python, loaded through config.json
+  `quantization`): fleurs-sv WER 5.80% with 59/59 transcripts identical to
+  fp16, median 0.52 s (-18%), 1.66 GB after load, 2.52 GB peak. The fp16 build
+  has no accuracy advantage over it on this set.
+
+Policy behaviour: noise/KB is 28/28 empty, as in Python. noise/general
+hallucinates 40 words with the policy on: none of the 28 decodes opens with
+the no-speech token, and the no_speech_prob skip never fires (an outcome; the
+probability itself was not logged). So the large-v3 route depends on the
+Silero gate in front of it (CoreML: 13 empty, 15 words).
+short08-en/general's 5 empties are the S1e "rebaseline" case.
+
+Landmines:
+- **The vendored tokenizer's `encode` is wrong for KB.** argmax-oss-swift
+  vendors swift-transformers inside ArgmaxCore, exposed through `WhisperKit`
+  as `AutoTokenizerWrapper`. There is no separate swift-transformers package
+  in the graph. Its ByteLevel pre-tokenizer prefixes a space to *every* regex
+  piece when `add_prefix_space` is set, and KB's tokenizer.json sets it
+  (openai's does not), so `encode("(")` returns `" ("`. The engine therefore
+  never calls `encode`: suppress sets come from direct vocab lookups and match
+  mlx_whisper's 82 non-speech tokens exactly on both tokenizers. Anything that
+  encodes text for KB in Swift (prompts, prefixes) inherits this bug.
+- **`tokenizer.decode` differs from tiktoken for large-v3.** openai's
+  tokenizer_config sets `clean_up_tokenization_spaces` (" ." becomes ".",
+  " 's" becomes "'s"); KB's does not. The engine decodes byte-level BPE
+  itself.
+- **`convertTokenToId` returns the unk id (`<|endoftext|>`) for unknown
+  strings**, so a bad language code silently becomes EOT. The engine checks
+  the round trip.
+- Input parity: ffmpeg rounds float to s16 half-up (`floor(x*32768 + 0.5)`),
+  not to nearest even. mlx-eval quantizes the same way so per-clip diffs
+  measure the engine (eval only; the app feeds floats). With that, the Swift
+  mel segment and mel filters (Slaney, computed, not loaded) are bit-identical
+  to Python's.
+- fleurs-sv clip 1716 is 31.4 s. mlx-eval decodes one 30 s window and stops
+  with an error on anything longer, so mlx.sh scores fleurs-sv on a filtered
+  copy of 59 clips. That is why score.py reports "59 clips, baseline 60" in
+  its REGRESSION lines. A seek loop is needed before long dictations bypass
+  the Silero cap.
+- mlx-swift's README says SwiftPM cannot build the Metal shaders. With Xcode
+  26's SwiftPM it does (`mlx-swift_Cmlx.bundle/default.metallib`), with
+  identical output, so mlx.sh uses `swift build` like run.sh. The xcodebuild
+  fallback command is in the script.
+- The weights carry `alignment_heads` (word timestamps). The loader drops it
+  and otherwise verifies `noUnusedKeys`.
+
+Verdict: the Swift engine reproduces the Python MLX numbers (WER equal on
+every route, fleurs-sv transcript-identical, 3x faster than CoreML holds). Run
+KB at 8-bit: same transcripts, 18% faster, half the memory. Not measured yet:
+power on the GPU versus the ANE (S7), and a cold load straight from disk.
