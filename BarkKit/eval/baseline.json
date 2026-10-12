@@ -1,0 +1,78 @@
+{
+  "fleurs-en/general": {
+    "decode_median": 1.325657896,
+    "decode_p90": 1.7122301663000001,
+    "empty": 0,
+    "n": 60,
+    "rtf": 0.11864530851959018,
+    "wer": 0.047050561797752806
+  },
+  "fleurs-en/swedish": {
+    "decode_median": 1.6569173755,
+    "decode_p90": 2.4788131834,
+    "empty": 0,
+    "n": 60,
+    "rtf": 0.16041425664914818,
+    "wer": 0.5625
+  },
+  "fleurs-sv/general": {
+    "decode_median": 1.8730632705,
+    "decode_p90": 2.4558008499999997,
+    "empty": 0,
+    "n": 60,
+    "rtf": 0.1606571191288385,
+    "wer": 0.09069767441860466
+  },
+  "fleurs-sv/swedish": {
+    "decode_median": 2.0125732085,
+    "decode_p90": 2.6485333577,
+    "empty": 0,
+    "n": 60,
+    "rtf": 0.17360944891740904,
+    "wer": 0.059689922480620154
+  },
+  "noise/general": {
+    "decode_median": 0.30423243749999995,
+    "decode_p90": 0.3052608876999999,
+    "empty": 13,
+    "hallucinated_words": 15,
+    "n": 28,
+    "rtf": 0.061363505949999994
+  },
+  "noise/swedish": {
+    "decode_median": 0.434000375,
+    "decode_p90": 0.43461918740000005,
+    "empty": 28,
+    "hallucinated_words": 0,
+    "n": 28,
+    "rtf": 0.08675815774285715
+  },
+  "short08-en/general": {
+    "decode_median": 0.4166432705,
+    "decode_p90": 0.46457994610000003,
+    "empty": 2,
+    "n": 60,
+    "rtf": 0.5066483541458333
+  },
+  "short08-sv/swedish": {
+    "decode_median": 0.5090244585,
+    "decode_p90": 0.6154283417,
+    "empty": 16,
+    "n": 60,
+    "rtf": 0.6485190580833333
+  },
+  "short25-en/general": {
+    "decode_median": 0.5619509785000001,
+    "decode_p90": 0.6732111869,
+    "empty": 0,
+    "n": 60,
+    "rtf": 0.22699186772666669
+  },
+  "short25-sv/swedish": {
+    "decode_median": 0.8053285210000001,
+    "decode_p90": 0.9841413874999999,
+    "empty": 0,
+    "n": 60,
+    "rtf": 0.32619766755333335
+  }
+}

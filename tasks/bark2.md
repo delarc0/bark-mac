@@ -250,7 +250,7 @@ pinned, windowClipTime 0, no detectLanguage, firstTokenLogProbThreshold nil
 as in shipping fix 74446f7), no silence trimming. FLEURS test,
 first 60 sentence ids per language after sorting by id (one recording per id,
 first in file order). Both languages use ids 1660-1719; the list is in
-`~/Library/Application Support/Bark/eval/fleurs/{sv,en}/ids.txt`. WER is
+`~/Library/Application Support/Bark/eval/sets/fleurs-{sv,en}/ids.txt`. WER is
 corpus-level jiwer on `raw_transcription`, normalised with whisper-normalizer
 (English normaliser for en, Basic for sv). M5 Pro, nothing else on the GPU/ANE.
 Decode time is per clip, after load and a 3 s warmup, and includes WhisperKit's
@@ -353,3 +353,58 @@ warmup.
   final text.
 - Not measured: the int8-v2 encoder and FluidAudio's newer "Parakeet Ultra"
   model, which its README calls more accurate than v3.
+
+## Harness v2 (2026-10-12), engine-only
+
+`BarkKit/eval/run.sh` builds every set (`prep.py`), runs the shipping engine on
+each route and gates with `score.py` against the committed
+`BarkKit/eval/baseline.json` (one entry per set and model; metrics only, no
+transcripts). `run.sh --write-baseline` rewrites it. Exit 1 on: a missing or
+resized run, WER up 0.3 points absolute, more empty results than the baseline,
+or any hallucinated word on a set whose baseline has none. Two back-to-back
+runs gave identical numbers and exit 0; blanking three hypotheses exits 1.
+
+Sets (data outside git under `~/Library/Application Support/Bark/eval/sets`):
+- `fleurs-sv`, `fleurs-en`: the S0 clips, WER.
+- `short08-*`, `short25-*`: the same clips cut to 0.8 s and 2.5 s, metric
+  empty-result rate. Cut from speech onset (first 10 ms frame above 10% of the
+  clip's loudest, minus 100 ms), not from the start of the file: FLEURS opens
+  with a median 0.4 s of silence, so a plain first 0.8 s would often hold no
+  speech and an empty result would be correct.
+- `noise`: 28 generated clips, 1/3/6/10 s each of digital silence, pink room
+  tone at -60 and -50 dBFS RMS, fan (hum plus rumble) at -45 and -35 dBFS RMS,
+  and keyboard-like click bursts peaking at -30 and -15 dBFS. Seeded, so it
+  regenerates identically. Metric: hallucinated words after normalisation.
+
+Engine-only baseline:
+
+| set | model | n | WER | empty | hallucinated words |
+|-----|-------|---|-----|-------|--------------------|
+| fleurs-sv | kb-whisper-large | 60 | 5.97% | 0 | - |
+| fleurs-sv | whisper-large-v3 | 60 | 9.07% | 0 | - |
+| fleurs-en | whisper-large-v3 | 60 | 4.71% | 0 | - |
+| fleurs-en | kb-whisper-large (canary) | 60 | 56.25% | 0 | - |
+| short08-sv | kb-whisper-large | 60 | - | **16** | - |
+| short25-sv | kb-whisper-large | 60 | - | 0 | - |
+| short08-en | whisper-large-v3 | 60 | - | 2 | - |
+| short25-en | whisper-large-v3 | 60 | - | 0 | - |
+| noise | kb-whisper-large | 28 | - | 28 | 0 |
+| noise | whisper-large-v3 | 28 | - | 13 | **15** |
+
+- **KB drops 27% of sub-1 s Swedish clips.** It emits its `<|nospeech|>`
+  token as the first token at near-certainty (log prob about -1e-4), so the
+  text comes back empty. large-v3 on the same 0.8 s Swedish clips returns
+  text for all 60. At 2.5 s KB is fine. Today's app sends short clips to KB
+  only on an explicit Swedish setting (auto routing needs at least 1 s), but
+  that is exactly the "ja", "okej" case. Candidate fixes for P1: suppress the
+  no-speech token on KB, or send sub-1 s audio to large-v3. Each needs its
+  own measurement.
+- Without a gate, large-v3 says "you" on digital silence and on keyboard
+  clicks at every length, "Amen." on 1 s of fan, and "so" once. KB says nothing
+  on any noise clip.
+- Engine-only noise counts are recorded but cannot gate: with no speech gate
+  in front of the decoder they are expected, and fallback sampling makes them
+  random. The pipeline-mode noise baseline will be 0, which turns on the
+  "any hallucination fails" rule.
+- Full FLEURS test split (the PRD's gate size) and the pipeline mode are not
+  built yet; the pipeline mode needs BarkKit's pipeline.
