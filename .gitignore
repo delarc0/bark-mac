@@ -8,7 +8,7 @@ DerivedData/
 build/
 .build/
 Bark.xcodeproj/
-Bark/Info.plist
+App/Info.plist
 
 # Swift Package Manager
 Package.resolved
