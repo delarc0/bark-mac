@@ -82,12 +82,13 @@ public actor MeetingSession {
         try store.addGap(id, at: Double(position) / Double(Segmenter.sampleRate), reason: reason)
     }
 
-    /// Work queued behind the decoder: closed segments waiting, and seconds of audio in them plus
-    /// audio Silero has not reached yet. Bounded when decoding keeps up with the meeting.
+    /// Work queued behind the decoder: segments ready to decode, and seconds of audio in them plus
+    /// audio Silero has not reached yet. Bounded when decoding keeps up with the meeting. A last
+    /// segment held for a short one to join it is not backlog.
     public var backlog: (segments: Int, seconds: Double) {
-        let segments = streams.values.reduce(0) { $0 + $1.segmenter.pending.count }
+        let segments = streams.values.reduce(0) { $0 + $1.segmenter.ready.count }
         let samples = streams.values.reduce(0) { total, stream in
-            total + stream.segmenter.pending.reduce(0) { $0 + $1.count } + max(0, stream.segmenter.end - stream.segmenter.processed)
+            total + stream.segmenter.ready.reduce(0) { $0 + $1.count } + max(0, stream.segmenter.end - stream.segmenter.processed)
         }
         return (segments, Double(samples) / Double(Segmenter.sampleRate))
     }
@@ -194,7 +195,7 @@ public actor MeetingSession {
 
     /// The stream whose next segment starts earliest in the meeting, among those that can decode.
     private func oldest(includingHeld: Bool) -> MeetingStream? {
-        streams.filter { includingHeld ? !$0.value.segmenter.pending.isEmpty : $0.value.segmenter.hasReady }
+        streams.filter { includingHeld ? !$0.value.segmenter.pending.isEmpty : !$0.value.segmenter.ready.isEmpty }
             .min { $0.value.origin + $0.value.segmenter.pending[0].lowerBound < $1.value.origin + $1.value.segmenter.pending[0].lowerBound }?
             .key
     }

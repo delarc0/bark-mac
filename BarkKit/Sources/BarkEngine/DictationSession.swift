@@ -125,7 +125,7 @@ public actor DictationSession {
                 await step(chunk)
             } else if route == nil, let evidence = languageEvidence() {
                 await decide(on: evidence)
-            } else if route != nil, segmenter.hasReady {
+            } else if route != nil, !segmenter.ready.isEmpty {
                 await decode()
             } else {
                 return

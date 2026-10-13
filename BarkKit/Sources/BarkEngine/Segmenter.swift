@@ -62,12 +62,13 @@ struct Segmenter {
         openStart.map { min(processed, end) - $0 } ?? 0
     }
 
-    /// The last closed segment waits while less than 1 s of speech follows it, and only while a
-    /// short segment could still join it: in a meeting, silence after a turn can last minutes.
-    var hasReady: Bool {
-        guard let last = pending.last else { return false }
+    /// Closed segments that can decode now. The last one waits while less than 1 s of speech
+    /// follows it, and only while a short segment could still join it: in a meeting, silence
+    /// after a turn can last minutes.
+    var ready: ArraySlice<Range<Int>> {
+        guard let last = pending.last else { return [] }
         let held = openLength < Self.oneSecond && processed - Self.padding - last.lowerBound <= Self.maxSegment
-        return pending.count > (held ? 1 : 0)
+        return pending.dropLast(held ? 1 : 0)
     }
 
     /// Takes Silero's verdict on `nextChunk` (or `remainder`); nil when Silero failed.
