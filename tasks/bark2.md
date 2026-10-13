@@ -942,3 +942,101 @@ Landmines:
 - WhisperKit's WAV loader drops the last sample of some clips (float
   rounding of the end time); mlx-eval now reads the whole file.
 
+## P2a result (2026-10-13): meeting store and meeting session
+
+Library only, no UI and no capture. `BarkStore` (system SQLite3 and
+AVFoundation, no new dependency) and `MeetingSession` in BarkEngine; 80
+Swift tests (12 new: 8 store, 4 meeting), the meeting ones skip without
+models and clips.
+
+- Store: `~/Library/Application Support/Bark/Meetings/bark.sqlite` (WAL,
+  synchronous FULL, schema by `user_version`; a store from a newer Bark is
+  refused) plus a folder per meeting. Tables meetings, segments (stream,
+  seconds from start, text, model id, language, redecoded, speaker),
+  speakers, notes (the user's own, one per meeting), gaps, outbox (queue
+  operations only; P3 sends).
+- Audio: each stream appended as 16 kHz 16-bit PCM as it is fed, write(2)
+  per chunk (a crash of Bark loses nothing) and fsync every 2 s of audio. At
+  finish it is compressed to ALAC in `<stream>.caf`, the frame count checked,
+  then the PCM deleted; the test decodes it back sample for sample.
+  `archiveLeftovers()` redoes an archive a quit cut short.
+  `deleteExpiredAudio` (default 30 days) deletes audio of finished meetings
+  and sets `audio_deleted_at`; transcripts stay, unfinished meetings are
+  never expired.
+- `Segmenter`, extracted from DictationSession (not copied): the same Silero
+  settings, 28 s cut and sub-1 s join, with absolute indices and audio
+  dropped once no segment needs it. Dictation output is unchanged (long-en,
+  long-sv, dict-sv, fleurs-en through the 8-bit pipeline: same segmentation
+  on every clip, same text except long-sv 1680, which samples at a fallback
+  temperature as noted in P1a.1). `Transcriber.decodeSegment` is the shared
+  decode policy, P1a.1 re-decode included.
+- `MeetingSession`: explicit language through the routing rule (sv = KB; a
+  meeting waits for KB to load instead of decoding on large-v3), one
+  Segmenter per stream, decodes oldest first across streams, commits each
+  segment as it is decoded. A decode that fails is a gap row ("decode
+  failed"), its audio kept. `finish()` decodes the tails, marks done and
+  queues the outbox in one transaction, then archives. `markGap(reason:)`
+  records the current position.
+- Recovery: `MeetingStore.unfinished()` lists meetings left recording or
+  transcribing; `MeetingSession.recover(id)` replays each stream's PCM from
+  its last committed segment end in 30 s blocks and finishes. The kill test
+  drops a session without finish() at 70% of a two-stream meeting (4
+  segments committed, the open and held ones not), reopens the store, and
+  recovers: every clip fed has a transcript in its stream, no recovered
+  segment starts before the stream's last committed end, the CAF holds every
+  sample fed.
+
+### Mini S7 budget (M5 Pro, 8-bit, on a charger)
+
+`mlx-eval --meeting`: a Swedish two-stream call, them = long-sv clips back to
+back with 1 s pauses (near-continuous speech), me = dict-sv clips with 2.3x
+their length of silence after each (30% talk), both through one
+MeetingSession in sv, 100 ms blocks at `--speed` x real time. Results in
+`eval/meeting/*.jsonl`.
+
+| run | 90 min at 10x | 15 min at 1x (real time) | 30 min at 30x (headroom) |
+|-----|---------------|---------------------------|--------------------------|
+| backlog (ready segments, s of audio) | max 1 segment, 26.1 s; flat over the run | max 0, 0.7 s | grows: 68 segments, 985 s at stop |
+| finish() to done | 1.44 s | 1.21 s | 47.8 s |
+| archive (ALAC, both streams) | 2.22 s | 0.36 s | 0.76 s |
+| segments / failed decodes / re-decoded | 461 / 0 / 0 | 78 / 0 / 0 | 156 / 0 / 0 |
+| CPU time per audio minute | 2.4 s | 2.9 s | 3.2 s |
+| peak memory: footprint / MLX | 6.84 / 4.20 GB | 6.20 / 4.20 GB | 6.72 / 4.20 GB |
+| thermal state | nominal throughout | nominal | nominal |
+
+- Decoding keeps up with a 90-minute meeting at 10x real time; the 30x run
+  falls behind and drains 30 audio minutes in 108 s, so the decoder runs
+  about 16x faster than this meeting arrives. Target "final transcript
+  within 2 minutes of stop": 1.2 to 1.4 s.
+- CPU 2.9 s per audio minute in real time is about 5% of one core; the GPU
+  does the decoding and is not in that number.
+- ALAC sizes, 15-minute run: them 15.4 MB (raw 28.8), me 4.9 MB (raw 28.8,
+  mostly digital silence). A real room will compress less.
+- Not measured here: power and drain on battery, and the slowest team Mac
+  (the team's Macs are still unknown), real call audio (process tap, AEC,
+  overlapping speech), and transcript WER on a real meeting. FLEURS-based
+  read speech with digital silence is a load test, not an accuracy test.
+
+Landmines:
+- Footprint grows from 4.9 to about 6.5 GB over the first half hour and
+  levels off while MLX active memory stays at 3.3 to 4.2 GB: it is MLX's
+  buffer cache (2.2 GB by 30 minutes at 30x). Worth a `Memory.cacheLimit`
+  before meetings ship, measured against dictation latency.
+- The short-segment rule holds a stream's last segment for a short one to
+  join it. In a meeting a stream can stay silent for minutes, so the hold
+  now ends once no join is possible (28 s past the held segment's start).
+  The last thing a person said therefore reaches the store up to about 28 s
+  later, unless they speak again sooner; a live transcript view has to
+  expect that. A crash in that window is covered by recovery.
+- Streams are aligned by sample count. `markGap` only records a marker: it
+  does not close open segments or pad a stream, so capture (P2b) has to feed
+  silence for a device that drops out while the other stream runs, or that
+  stream's times drift.
+- Recovery restarts Silero at the resume point, so its segment boundaries
+  can differ from what the live session would have produced; no audio is
+  skipped or repeated.
+- A meeting in sv waits for the background KB load before its first decode
+  (seconds at launch); audio queues in memory meanwhile.
+- fsync, not F_FULLFSYNC, for the PCM (SQLite's default on macOS too): a
+  power cut can still lose what the drive cache holds.
+- Archiving runs on the session after done: 2.2 s for a 90-minute meeting.
