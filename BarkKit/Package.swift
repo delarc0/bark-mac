@@ -4,6 +4,9 @@ import PackageDescription
 let package = Package(
     name: "BarkKit",
     platforms: [.macOS(.v26)],
+    products: [
+        .library(name: "BarkCore", targets: ["BarkCore"]),
+    ],
     dependencies: [
         .package(url: "https://github.com/argmaxinc/argmax-oss-swift", exact: "1.1.0"),
         // Eval-only for now (Parakeet, Silero); P1 brings it into the app for the Silero gate.
@@ -12,6 +15,8 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.32.3"),
     ],
     targets: [
+        .target(name: "BarkCore"),
+        .testTarget(name: "BarkCoreTests", dependencies: ["BarkCore"]),
         .executableTarget(
             name: "bark-eval",
             dependencies: [.product(name: "WhisperKit", package: "argmax-oss-swift")]
