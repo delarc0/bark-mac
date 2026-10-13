@@ -70,6 +70,11 @@ public struct Notes: Sendable, Equatable {
 public struct Gap: Sendable, Equatable {
     public let at: Double
     public let reason: String
+
+    public init(at: Double, reason: String) {
+        self.at = at
+        self.reason = reason
+    }
 }
 
 /// A meeting waiting for hq. The row stays until hq acknowledges it.

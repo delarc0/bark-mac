@@ -118,13 +118,29 @@ public actor Transcriber {
     }
 
     public func makeSession(language: LanguageChoice, cleanup: Bool = true, vocabulary: [String: String] = [:]) throws -> DictationSession {
+        DictationSession(transcriber: self, vad: try startedVAD(), choice: language, cleanup: cleanup, vocabulary: vocabulary)
+    }
+
+    /// Silero for a session's segmenters, once start() has run.
+    func startedVAD() throws -> VadManager {
         guard let vad, engines[.general] != nil else { throw TranscriberError.notStarted }
-        return DictationSession(transcriber: self, vad: vad, choice: language, cleanup: cleanup, vocabulary: vocabulary)
+        return vad
     }
 
     /// The model a dictation routed to `role` runs on: Swedish falls back to general until KB is loaded.
     func available(_ role: ModelRole) -> ModelRole {
         engines[role] != nil ? role : .general
+    }
+
+    /// Throws for a language code the models have no token for.
+    func checkLanguage(_ code: String) throws {
+        guard let engine = engines[.general] else { throw TranscriberError.notStarted }
+        _ = try engine.vocabulary.language(code)
+    }
+
+    /// The model's id, its folder's name (kb-whisper-large-8bit).
+    func modelID(_ role: ModelRole) -> String {
+        (role == .swedish ? swedishFolder ?? generalFolder : generalFolder).lastPathComponent
     }
 
     func remember(_ language: String?) {
