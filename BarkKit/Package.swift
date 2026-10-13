@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "BarkCore", targets: ["BarkCore"]),
         .library(name: "BarkEngine", targets: ["BarkEngine"]),
         .library(name: "BarkCapture", targets: ["BarkCapture"]),
+        .library(name: "BarkStore", targets: ["BarkStore"]),
     ],
     dependencies: [
         // Spike tools only (bark-eval, stream-eval): the WhisperKit/CoreML engine Bark2 replaces.
@@ -22,18 +23,22 @@ let package = Package(
             name: "BarkEngine",
             dependencies: [
                 "BarkCore",
+                "BarkStore",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ]
         ),
         .target(name: "BarkCapture", dependencies: ["BarkCore"]),
+        // SQLite and AVFoundation from the SDK only.
+        .target(name: "BarkStore"),
         .testTarget(name: "BarkCoreTests", dependencies: ["BarkCore"]),
         .testTarget(name: "BarkCaptureTests", dependencies: ["BarkCapture"]),
-        .testTarget(name: "BarkEngineTests", dependencies: ["BarkEngine", .product(name: "MLX", package: "mlx-swift")]),
+        .testTarget(name: "BarkStoreTests", dependencies: ["BarkStore"]),
+        .testTarget(name: "BarkEngineTests", dependencies: ["BarkEngine", "BarkStore", .product(name: "MLX", package: "mlx-swift")]),
         .executableTarget(
             name: "mlx-eval",
-            dependencies: ["BarkEngine", .product(name: "MLX", package: "mlx-swift")]
+            dependencies: ["BarkEngine", "BarkStore", .product(name: "MLX", package: "mlx-swift")]
         ),
         .executableTarget(
             name: "bark-eval",
