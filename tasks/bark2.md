@@ -51,23 +51,45 @@ Every problem today's Bark solves must be solved at least as well.
 - Every dependency pinned to an exact version.
 
 ### Dictation
-- Final text: kb-whisper-large for Swedish, whisper-large-v3 for everything
-  else, on argmax-oss-swift (WhisperKit). Re-chosen on evidence: Parakeet v3
-  measures ~16.8% Swedish WER on FLEURS against KB's 4.56%.
+Re-decided on measurement 2026-10-12 (S1, S1d, S1e, S8); the spike sections
+below hold the numbers.
+- Engine: our own Whisper on Apple's mlx-swift (S8), not WhisperKit/CoreML.
+  Same weights decode 3x faster (15 ms vs 45 ms per token) at equal or better
+  WER, and owning the decode loop puts every past landmine (no-speech token,
+  first-token threshold, timestamps) in our code. No WhisperKit, no CoreML,
+  no ANE in the app; the ANE-wedge self-heal and the 239 s first compile go
+  away with them.
+- Models: kb-whisper-large for Swedish, whisper-large-v3 for everything
+  else, MLX safetensors. 8-bit (group 64) is the default if the pipeline
+  gate passes on every set (S8: identical on fleurs-sv, 18% faster, half the
+  memory); fp16 otherwise.
+- Tokenizer: our own, read from tokenizer.json (vocab id lookups and the
+  GPT-2 byte decode S8 already uses). The vendored swift-transformers
+  tokenizer mis-encodes KB (S8 landmine) and is the only reason the engine
+  needs WhisperKit.
+- Decode policy (S1b, S1e): forced language, no timestamps, no conditioning
+  on earlier text, mlx_whisper's fallback ladder and thresholds; the
+  no-speech token is allowed on audio of 1 s or more and a decode that opens
+  with it is empty; under 1 s it is suppressed.
 - Routing rule carried over as a pure, tested function: KB only on an explicit
   user language or a fresh detection on THIS audio of at least 1 s and 0.85
-  confidence. A remembered language may prefill the general model, never route.
-- Streaming: decode while recording, each window conditioned on the
-  already-confirmed text, so release-to-paste only covers the last seconds and
-  there are no context-free seams. Spike S1 decides the mechanism and must
-  show no accuracy loss against one-shot decoding.
-- Live preview (hypothesis, conditional): a fast volatile transcript in the
-  notch while speaking, replaced by the final text. Spike S2 runs only if S1
-  misses the D3 target.
-- D3 target: release-to-paste p50 under 0.5 s and p95 under 1.0 s for a 10 s
-  dictation on the M5 Pro (today's app is measured first as the baseline).
-- Speech gate: model VAD (Silero) if spike S3 beats the energy gate on both
-  hallucinations and quiet voices; otherwise keep energy.
+  confidence. Detection runs on the general model (first decoder step over
+  the language tokens). A remembered language may prefill the general model,
+  never route.
+- Streaming (S1): Silero v6 (FluidAudio, threshold 0.5, 0.5 s pause) closes
+  segments while the key is held; each closed segment is decoded at once,
+  unprompted; release decodes only the open tail. Prompting and the confirm
+  loop were rejected (slower, no accuracy gain); a short length cap was
+  rejected (doubles Swedish WER, S1d). Segments stay under 30 s: an open
+  segment that reaches 28 s is cut at the longest pause in its last 3 s.
+- Language per dictation: decided on the first 1 s or more of speech and
+  pinned for that dictation; shorter earlier segments wait for it. If the key
+  is released first, it is decided on all the audio.
+- D3 target (revised, S1e): release-to-paste p50 under 1.0 s and p95 under
+  1.5 s for a 10 s dictation on the M5 Pro. One-shot MLX alone measures
+  0.63 / 0.80 s on fleurs-sv.
+- Speech gate: Silero (S3). No speech segment means nothing is pasted.
+- Live preview: dropped. S2 is not needed; D3 is met without it.
 - Vocabulary (hypothesis): prompt the model with names and terms pulled from
   hq. Spike S6; risk is the model inserting prompt words that were not said.
 - Insertion: ⌘V with clipboard restore stays primary (ConcealedType marker,
@@ -75,8 +97,10 @@ Every problem today's Bark solves must be solved at least as well.
   the current keyboard layout. AX insert becomes primary per app only after a
   matrix passes (Slack, Chrome, Notion, Terminal, Teams, Mail, Xcode).
 - Models live in `~/Library/Application Support/Bark/Models`, downloaded with
-  checksums. Never `~/Documents`.
+  checksums from a manifest. Never `~/Documents`.
 - Swedish model on by default only when the user's languages include Swedish.
+- Dev builds use bundle ID `se.lab37.bark.mac.dev` so they run beside the
+  shipping Bark; release builds keep `se.lab37.bark.mac`.
 
 ### Meetings
 - Three modes (proposed, Erik to confirm in-person scope):
@@ -133,19 +157,26 @@ Every problem today's Bark solves must be solved at least as well.
 ## Lessons that become tests
 
 Each one bit Bark once. Each gets a test or an eval case.
-- Clips under 1 s decode empty unless `windowClipTime = 0`.
-- `firstTokenLogProbThreshold` (WhisperKit-only default -1.5) ends the decode
-  at zero tokens when the first word is uncertain (a name), so the result is
-  empty. Set it to nil. Found by S0: 2 of 60 sv clips empty on large-v3.
-- `DecodingOptions.detectLanguage` misdetects; use the dedicated detection API.
-- Whisper says "Thank you." on silence at noSpeechProb 0.00.
+- Clips under 1 s must decode (WhisperKit needed `windowClipTime = 0`;
+  the MLX engine pads like mlx_whisper): short08 sets in the gate.
+- A name as the first word must not end the decode empty (WhisperKit's
+  `firstTokenLogProbThreshold`; the MLX engine has no such cut-off): an eval
+  case with names first.
+- Language detection is its own decoder step on the general model, never a
+  decode option.
+- Whisper says "Thank you." on silence at noSpeechProb 0.00, and KB says
+  "Tack!" or "Musik" when its no-speech token is suppressed (S1e): the
+  no-speech policy plus the Silero gate; noise sets must stay at 0 words.
+- The tokenizer must not come from `encode()` for KB (prefix-space bug, S8),
+  and a language code that is not in the vocab must fail loudly.
 - Warmup must decode real silence and bypass the speech gate.
 - KB-Whisper translates English into Swedish; routing needs fresh evidence.
 - AVAudioConverter downmixes multichannel interfaces to digital zero.
 - Loopback channels on an interface must not win channel selection.
 - Event taps get disabled by the system and must be re-enabled.
-- ANE decoder wedges on M1 and M2 Max; warmup under a timeout, self-heal to CPU+GPU.
-- First KB load is a ~239 s one-time compile; needs progress and precompile.
+- (WhisperKit era) The ANE decoder wedged on M1 and M2 Max and the first KB
+  load was a ~239 s compile. Both go away with MLX; what remains: the first
+  decode after install compiles Metal shaders (~4 s, S8), so warm up at launch.
 - Capitalisation must not fire after abbreviations (bl.a., t.ex., e.g.); this
   is a live bug in today's app.
 - A key release can be swallowed (screen lock, secure input, a disabled tap):
@@ -162,6 +193,8 @@ Each one bit Bark once. Each gets a test or an eval case.
 - A sample-rate change mid-capture restarts capture instead of pitch-shifting.
 - Every decode runs under a timeout; a hung task is orphaned, the app recovers.
 - Package.resolved is committed so transitive dependencies cannot float.
+- A single segment longer than 30 s must not reach the engine (one window):
+  the segmenter's 28 s cut, and a test.
 
 ## Evaluation harness (built first, gates everything)
 
@@ -210,8 +243,14 @@ Each one bit Bark once. Each gets a test or an eval case.
   - S7 long-meeting budget (see Meetings).
   - S2 SpeechAnalyzer Swedish preview: only if S1 misses D3.
 - P1 Dictation core: BarkKit + app shell, parity with every D-problem, eval
-  gate. Gate: our KB-Whisper conversion is published (otherwise Swedish users
-  get the general model).
+  gate. Release gate: our MLX KB-Whisper conversion is published (otherwise
+  Swedish users get the general model); building does not wait for it.
+  - P1a, BarkKit library (no UI): targets `BarkCore` (pure rules),
+    `BarkEngine` (MLX Whisper, own tokenizer, language detection, Silero
+    segmenter, dictation session), model store; `bark-eval --pipeline`
+    runs clips through the session exactly as the app will.
+  - P1b, the app on P1a: capture, hotkey, paste, notch/pill, settings,
+    onboarding, Sparkle, model download.
 - P2 Meetings: capture, transcription, speakers, durable store, notepad,
   detect-and-offer on audio.
 - P3 hq: API, MCP tools, agent pass, calendar enrichment (after the hq target
