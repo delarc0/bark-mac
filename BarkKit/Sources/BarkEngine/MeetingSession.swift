@@ -144,8 +144,14 @@ public actor MeetingSession {
         let clock = ContinuousClock()
         let stop = clock.now
         try store.setStatus(id, .transcribing, endedAt: endedAt)
-        for stream in streams.values {
-            try stream.writer?.close()
+        // A failed close (disk full) must not abandon the meeting: the tail is still in the
+        // segmenters and gets decoded; recovery covers whatever the .pcm lacks.
+        for (name, stream) in streams {
+            do {
+                try stream.writer?.close()
+            } catch {
+                log.error("closing \(String(describing: name), privacy: .public) audio failed: \(String(describing: error), privacy: .public)")
+            }
         }
         await pump?.value
         for stream in Array(streams.keys) {
