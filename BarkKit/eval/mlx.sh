@@ -1,6 +1,7 @@
 #!/bin/bash
 # Spike S8: run.sh's matrix on the Swift MLX engine (mlx-eval), scored against the CoreML baseline.
 # usage: mlx.sh [extra model]   e.g. mlx.sh swedish8 also runs fleurs-sv on the 8-bit KB build
+# Engine-only (no gate, no segmenter); eval/p1a.sh runs the same sets through the dictation pipeline.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -12,6 +13,7 @@ mkdir -p "$out/results" "$out/sets"
 # (mlx-swift_Cmlx.bundle/default.metallib lands next to the binary). If a toolchain ever regresses
 # ("Failed to load the default metallib"), build with:
 #   xcodebuild build -scheme mlx-eval -destination 'platform=macOS,arch=arm64' -configuration Release -derivedDataPath .build/xcode
+"$here/../scripts/dev-models.sh" > /dev/null
 swift build -c release --package-path "$here/.." --product mlx-eval
 bin="$(swift build -c release --package-path "$here/.." --show-bin-path)/mlx-eval"
 
