@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "BarkCore", targets: ["BarkCore"]),
         .library(name: "BarkEngine", targets: ["BarkEngine"]),
+        .library(name: "BarkCapture", targets: ["BarkCapture"]),
     ],
     dependencies: [
         // Spike tools only (bark-eval, stream-eval): the WhisperKit/CoreML engine Bark2 replaces.
@@ -26,7 +27,9 @@ let package = Package(
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ]
         ),
+        .target(name: "BarkCapture", dependencies: ["BarkCore"]),
         .testTarget(name: "BarkCoreTests", dependencies: ["BarkCore"]),
+        .testTarget(name: "BarkCaptureTests", dependencies: ["BarkCapture"]),
         .testTarget(name: "BarkEngineTests", dependencies: ["BarkEngine", .product(name: "MLX", package: "mlx-swift")]),
         .executableTarget(
             name: "mlx-eval",
