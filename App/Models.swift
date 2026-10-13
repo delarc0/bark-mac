@@ -1,5 +1,4 @@
 import BarkEngine
-import FluidAudio
 import Foundation
 import Observation
 import os
@@ -21,6 +20,8 @@ final class Models {
     // 8-bit is the default: same WER as fp16 on every P1a set at half the memory.
     static let general = ModelID.general8
     static let swedish = ModelID.swedish8
+    /// Silero ships inside the app and loads from there, so it is never fetched.
+    static let silero = Bundle.main.resourceURL!.appending(path: "silero-vad")
 
     private(set) var state = State.missing
     /// Required models that are not on disk, general first.
@@ -60,7 +61,6 @@ final class Models {
 
     /// Checks the disk and loads what is there.
     func load() {
-        Self.installSilero()
         let required = settings.swedishModelEnabled ? [Self.general, Self.swedish] : [Self.general]
         missing = required.filter { !store.isInstalled($0) }
         guard store.isInstalled(Self.general) else {
@@ -74,7 +74,7 @@ final class Models {
         if folders == loaded, state == .loading || state == .ready { return }
         loaded = folders
         // A dictation in flight keeps the transcriber it started on; this one serves the next.
-        let transcriber = Transcriber(general: store.folder(Self.general), swedish: swedish)
+        let transcriber = Transcriber(general: store.folder(Self.general), swedish: swedish, vad: Self.silero)
         self.transcriber = transcriber
         setState(.loading)
         Task {
@@ -132,25 +132,6 @@ final class Models {
 
     private func manifests(_ ids: [String]) -> [ModelManifest] {
         ids.compactMap { id in ModelManifest.all.first { $0.id == id } }
-    }
-
-    /// Silero ships inside the app and is copied to where FluidAudio's VadManager looks for it,
-    /// and FluidAudio is kept offline, so it is never fetched from Hugging Face at runtime.
-    // shortcut: Transcriber builds VadManager() itself with FluidAudio's default folder; when
-    // BarkEngine takes a VAD folder, load the bundled copy in place and drop the copy.
-    static func installSilero() {
-        ModelHub.offlineMode = true
-        let target = URL.applicationSupportDirectory.appending(path: "FluidAudio/Models")
-            .appending(path: Repo.vad.folderName).appending(path: ModelNames.VAD.sileroVadFile)
-        guard !FileManager.default.fileExists(atPath: target.path),
-              let bundled = Bundle.main.resourceURL?.appending(path: "silero-vad/\(ModelNames.VAD.sileroVadFile)") else { return }
-        do {
-            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: bundled, to: target)
-        } catch {
-            Logger(subsystem: "se.lab37.bark.mac", category: "Models")
-                .error("Silero install failed: \(error.localizedDescription, privacy: .public)")
-        }
     }
 }
 

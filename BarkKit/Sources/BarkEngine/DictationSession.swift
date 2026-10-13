@@ -64,6 +64,7 @@ public actor DictationSession {
     private var detection: Detection?
     private var segments: [DictationResult.Segment] = []
     private var released = false
+    private var cancelled = false
     private var pump: Task<Void, Never>?
 
     init(transcriber: Transcriber, vad: VadManager, choice: LanguageChoice, cleanup: Bool, vocabulary: [String: String]) {
@@ -82,7 +83,21 @@ public actor DictationSession {
         wakeUp.yield()
     }
 
+    /// Abandons the dictation: no more audio is taken, queued segments are dropped, a decode in
+    /// flight is left to end on its own and its text discarded. finish() then returns empty text
+    /// at once. Safe to call more than once.
+    public func cancel() {
+        guard !cancelled else { return }
+        cancelled = true
+        released = true
+        pending.removeAll()
+        wakeUp.yield()
+    }
+
     public func finish() async -> DictationResult {
+        if cancelled {
+            return DictationResult(text: "", releaseToFinal: 0, segments: [], model: nil, language: nil, detection: nil)
+        }
         let clock = ContinuousClock()
         let release = clock.now
         released = true
@@ -104,6 +119,7 @@ public actor DictationSession {
             await drain()
             if released { break }
         }
+        guard !cancelled else { return }
         if processed < samples.count {
             await step(Array(samples[processed...]))
         }
@@ -114,7 +130,7 @@ public actor DictationSession {
         if route == nil, !pending.isEmpty {
             await decide(on: pending.flatMap { samples[$0] })
         }
-        while !pending.isEmpty {
+        while !pending.isEmpty, !cancelled {
             await decode(pending.removeFirst())
         }
     }
@@ -122,7 +138,7 @@ public actor DictationSession {
     /// Everything that can run now: Silero first, so segments close on time, then the language
     /// decision, then decodes.
     private func drain() async {
-        while true {
+        while !cancelled {
             if samples.count - processed >= VadManager.chunkSize {
                 await step(Array(samples[processed ..< processed + VadManager.chunkSize]))
             } else if route == nil, let evidence = languageEvidence() {
@@ -216,11 +232,13 @@ public actor DictationSession {
         let speech = speechSeconds(range)
         var result = try? await transcriber.transcribe(audio, on: route.model, language: route.language)
         var redecoded = false
+        guard !cancelled else { return }
         if let plain = result, Truncation.isTruncated(speechSeconds: speech, tokens: plain.tokens, language: route.language),
            let full = try? await transcriber.transcribeTimestamped(audio, on: route.model, language: route.language) {
             result = full
             redecoded = true
         }
+        guard !cancelled else { return }
         segments.append(DictationResult.Segment(audioSeconds: Double(range.count) / Double(Self.sampleRate),
                                                 speechSeconds: speech,
                                                 tokens: result?.tokens ?? 0,

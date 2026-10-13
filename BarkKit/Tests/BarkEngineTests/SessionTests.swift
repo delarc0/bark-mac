@@ -18,8 +18,38 @@ struct WorkerTests {
 
 struct SessionTests {
     @Test func sessionBeforeStartThrows() async {
-        let transcriber = Transcriber(general: URL(filePath: "/nonexistent"), swedish: nil)
+        let transcriber = Transcriber(general: URL(filePath: "/nonexistent"), swedish: nil, vad: URL(filePath: "/nonexistent"))
         await #expect(throws: TranscriberError.self) { try await transcriber.makeSession(language: .auto) }
+    }
+
+    /// A missing Silero model is an error, never a download: start() fails before any model loads.
+    @Test func missingSileroFailsWithoutFetching() async {
+        let transcriber = Transcriber(general: URL(filePath: "/nonexistent"), swedish: nil, vad: URL(filePath: "/nonexistent"))
+        let clock = ContinuousClock()
+        let start = clock.now
+        await #expect(throws: (any Error).self) { try await transcriber.start() }
+        #expect(clock.now - start < .seconds(2))
+    }
+
+    @Test(.enabled(if: Fixtures.vadInstalled))
+    func sileroLoadsFromTheGivenFolder() throws {
+        _ = try Transcriber.loadVAD(Fixtures.vadFolder)
+    }
+
+    @Test(.enabled(if: Fixtures.clipsInstalled))
+    func cancelAbandonsTheDictation() async throws {
+        let session = try await Fixtures.transcriber.value.makeSession(language: .explicit("en"))
+        let audio = try Fixtures.clip("long-en")
+        await session.feed(Array(audio.prefix(audio.count / 2)))
+        await session.cancel()
+        await session.cancel()
+        await session.feed(Array(audio.suffix(audio.count / 2)))
+        let result = await session.finish()
+        #expect(result.text == "" && result.segments.isEmpty && result.model == nil)
+        // The transcriber is free for the next dictation.
+        let next = try await Fixtures.transcriber.value.makeSession(language: .explicit("en"))
+        await next.feed(try Fixtures.clip("fleurs-en"))
+        #expect(await !next.finish().text.isEmpty)
     }
 
     @Test(.enabled(if: Fixtures.modelsInstalled))

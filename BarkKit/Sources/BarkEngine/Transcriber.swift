@@ -1,4 +1,5 @@
 import BarkCore
+import CoreML
 import FluidAudio
 import Foundation
 import Synchronization
@@ -46,6 +47,7 @@ public actor Transcriber {
     let worker = MLXWorker()
     private let generalFolder: URL
     private let swedishFolder: URL?
+    private let vadFolder: URL
     private var engines: [ModelRole: Engine] = [:]
     private var swedishLoad: Task<Void, Never>?
     private var vad: VadManager?
@@ -53,27 +55,42 @@ public actor Transcriber {
     private(set) var remembered: String?
     private let log = Logger(subsystem: "se.lab37.bark.mac", category: "Transcriber")
 
+    /// The compiled Silero model `vadFolder` must hold.
+    public static let sileroModel = ModelNames.VAD.sileroVadFile
+
     /// Model folders as ModelStore lays them out. Without a Swedish folder, Swedish runs on general.
-    public init(general: URL, swedish: URL?) {
+    /// `vad` holds `sileroModel`; it is loaded from there and never downloaded.
+    public init(general: URL, swedish: URL?, vad: URL) {
         generalFolder = general
         swedishFolder = swedish
+        vadFolder = vad
     }
 
     /// Loads and warms the general model and Silero, then starts loading the Swedish model in the
     /// background. Returns once dictation can run.
     public func start() async throws {
+        if vad == nil {
+            vad = try Self.loadVAD(vadFolder)
+        }
         if engines[.general] == nil {
             let folder = generalFolder
             let engine = try await worker.run { try Engine(folder: folder) }
             try await warmUp(engine, language: "en")
             engines[.general] = engine
         }
-        if vad == nil {
-            vad = try await VadManager(config: VadConfig(defaultThreshold: Self.vadThreshold))
-        }
         if let swedishFolder, swedishLoad == nil {
             swedishLoad = Task { await loadSwedish(swedishFolder) }
         }
+    }
+
+    /// The model goes in directly: FluidAudio's own loaders fetch a missing model from Hugging Face.
+    static func loadVAD(_ folder: URL) throws -> VadManager {
+        let config = VadConfig(defaultThreshold: vadThreshold)
+        let options = MLModelConfiguration()
+        options.computeUnits = config.computeUnits
+        options.allowLowPrecisionAccumulationOnGPU = true
+        let model = try MLModel(contentsOf: folder.appending(path: sileroModel), configuration: options)
+        return VadManager(config: config, vadModel: model)
     }
 
     private func loadSwedish(_ folder: URL) async {

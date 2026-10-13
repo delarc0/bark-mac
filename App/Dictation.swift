@@ -128,7 +128,7 @@ final class Dictation {
 
     private func finish(_ pending: Pending, held: Duration, health: InputHealth) async {
         func discard() {
-            if let session = pending.session { Task { _ = await session.finish() } }
+            if let session = pending.session { Task { await session.cancel() } }
             state = .idle
         }
         guard held >= Self.minimumHold else {

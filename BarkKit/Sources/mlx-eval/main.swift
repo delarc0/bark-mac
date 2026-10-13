@@ -58,6 +58,9 @@ for id in needed where !store.isInstalled(id) {
     exit(1)
 }
 
+// Where FluidAudio cached Silero for the spike tools; the app ships its own copy.
+let sileroFolder = URL.applicationSupportDirectory.appending(path: "FluidAudio/Models/silero-vad")
+
 let clock = ContinuousClock()
 func seconds(_ d: Duration) -> Double {
     Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
@@ -129,10 +132,10 @@ if !pipeline {
     let transcriber: Transcriber
     let choice: LanguageChoice
     if let (general, swedish) = autoPairs[model], language == "auto" {
-        transcriber = Transcriber(general: store.folder(general), swedish: store.folder(swedish))
+        transcriber = Transcriber(general: store.folder(general), swedish: store.folder(swedish), vad: sileroFolder)
         choice = .auto
     } else {
-        transcriber = Transcriber(general: store.folder(modelIDs[model]!), swedish: nil)
+        transcriber = Transcriber(general: store.folder(modelIDs[model]!), swedish: nil, vad: sileroFolder)
         choice = .explicit(language)
     }
     let loadStart = clock.now

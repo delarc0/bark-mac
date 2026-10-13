@@ -11,10 +11,6 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: "2.9.4"
-  # Same pin as BarkKit. The app only sets FluidAudio's offline mode so Silero never downloads.
-  FluidAudio:
-    url: https://github.com/FluidInference/FluidAudio
-    exactVersion: "0.17.7"
 
 settings:
   base:
@@ -46,7 +42,6 @@ targets:
         product: BarkEngine
       - package: BarkKit
         product: BarkCapture
-      - package: FluidAudio
       - package: Sparkle
     postBuildScripts:
       - name: Deep re-sign (unify Team IDs; stabilize TCC grants across rebuilds)

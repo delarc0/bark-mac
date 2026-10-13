@@ -10,8 +10,10 @@ enum Fixtures {
     static let evalSets = URL.applicationSupportDirectory.appending(path: "Bark/eval/sets")
 
     static var generalID: String? { [ModelID.general8, ModelID.general].first(where: store.isInstalled) }
+    /// Where FluidAudio cached Silero on a dev Mac.
+    static let vadFolder = URL.applicationSupportDirectory.appending(path: "FluidAudio/Models/silero-vad")
     static var vadInstalled: Bool {
-        FileManager.default.fileExists(atPath: URL.applicationSupportDirectory.appending(path: "FluidAudio/Models/silero-vad").path)
+        FileManager.default.fileExists(atPath: vadFolder.appending(path: Transcriber.sileroModel).path)
     }
     static var modelsInstalled: Bool { generalID != nil && vadInstalled }
     static var clipsInstalled: Bool { modelsInstalled && FileManager.default.fileExists(atPath: evalSets.path) }
@@ -22,7 +24,7 @@ enum Fixtures {
         // bundle beside it, so point MLX at the built metallib directly.
         GPU.metallib = Bundle(for: BundleToken.self).bundleURL.deletingLastPathComponent()
             .appending(path: "mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib")
-        let transcriber = Transcriber(general: store.folder(generalID!), swedish: nil)
+        let transcriber = Transcriber(general: store.folder(generalID!), swedish: nil, vad: vadFolder)
         try await transcriber.start()
         return transcriber
     }
