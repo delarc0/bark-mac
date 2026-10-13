@@ -11,11 +11,13 @@ import MLX
 // wall-clock pace, where release_to_final is the wait after the last block.
 // --language auto (pipeline only) routes each clip through detection; --model auto|auto8 loads
 // large-v3 plus KB at fp16 or 8-bit. Models come from ModelStore (BarkKit/scripts/dev-models.sh).
+// --meeting runs the S7 meeting budget (MeetingBudget.swift).
 
 let usage = """
     usage: mlx-eval --model swedish|swedish8|general|general8 --language <code> --clips <dir> --out <file.jsonl>
            mlx-eval --pipeline [--realtime 1] --model <as above> --language <code> ...
            mlx-eval --pipeline [--realtime 1] --model auto|auto8 --language auto ...
+           mlx-eval --meeting [--speed 10] [--minutes 90] [--sample 60] --out <file.jsonl>
     """
 
 func fail(_ message: String) -> Never {
@@ -27,12 +29,28 @@ var args: [String: String] = [:]
 var argv = CommandLine.arguments.dropFirst()
 while let flag = argv.popFirst() {
     guard flag.hasPrefix("--") else { fail(usage) }
-    if flag == "--pipeline" {
-        args["pipeline"] = "1"
+    if flag == "--pipeline" || flag == "--meeting" {
+        args[String(flag.dropFirst(2))] = "1"
         continue
     }
     guard let value = argv.popFirst() else { fail(usage) }
     args[String(flag.dropFirst(2))] = value
+}
+
+// Where FluidAudio cached Silero for the spike tools; the app ships its own copy.
+let sileroFolder = URL.applicationSupportDirectory.appending(path: "FluidAudio/Models/silero-vad")
+
+if args["meeting"] == "1" {
+    guard let outPath = args["out"], let speed = Double(args["speed"] ?? "10"), let minutes = Double(args["minutes"] ?? "90"),
+          let sample = Double(args["sample"] ?? "60") else { fail(usage) }
+    let evalDir = URL.applicationSupportDirectory.appending(path: "Bark/eval")
+    FileManager.default.createFile(atPath: outPath, contents: nil)
+    let out = try FileHandle(forWritingTo: URL(fileURLWithPath: outPath))
+    try await MeetingBudget.run(speed: speed, minutes: minutes, sampleEvery: sample, sets: evalDir.appending(path: "sets"),
+                                storeRoot: evalDir.appending(path: "meeting/store"), out: out, models: ModelStore(),
+                                silero: sileroFolder) { FileHandle.standardError.write(Data("[mlx-eval] \($0)\n".utf8)) }
+    try out.close()
+    exit(0)
 }
 guard let model = args["model"], let language = args["language"],
       let clipsDir = args["clips"], let outPath = args["out"] else { fail(usage) }
@@ -57,9 +75,6 @@ for id in needed where !store.isInstalled(id) {
     log("model \(id.isEmpty ? model : id) missing in \(store.root.path); run BarkKit/scripts/dev-models.sh")
     exit(1)
 }
-
-// Where FluidAudio cached Silero for the spike tools; the app ships its own copy.
-let sileroFolder = URL.applicationSupportDirectory.appending(path: "FluidAudio/Models/silero-vad")
 
 let clock = ContinuousClock()
 func seconds(_ d: Duration) -> Double {
