@@ -28,21 +28,10 @@ public struct DictationResult: Sendable {
 }
 
 /// One dictation, one key press. Feed 16 kHz mono samples while recording; Silero closes segments
-/// at 0.5 s pauses and each closed segment is decoded as soon as it can be, serially and
-/// unprompted. finish() decodes the open tail and returns the cleaned text. Audio and text stay
-/// in memory.
-///
-/// A segment under 1 s is never decoded alone when it has a neighbour: Silero passes breaths and
-/// clicks that short, and Whisper turns them into "you" or "Thank you." (P1a). It joins the next
-/// segment, or the previous one, which therefore waits until 1 s of speech follows it.
+/// (Segmenter) and each closed segment is decoded as soon as it can be, serially and unprompted.
+/// finish() decodes the open tail and returns the cleaned text. Audio and text stay in memory.
 public actor DictationSession {
-    static let sampleRate = 16_000
-    // A segment starts at the 256 ms chunk that crossed the threshold; FluidAudio's default 0.1 s of
-    // padding cut word onsets off short clips (P1a: 0.3 s keeps them and lowers fleurs-en WER).
-    // minSpeechDuration only satisfies FluidAudio's debug assert; the streaming path ignores it.
-    static let segmentation = VadSegmentationConfig(minSpeechDuration: 0.3, minSilenceDuration: 0.5, speechPadding: 0.3)
-    static let maxSegment = Int(SegmentCut.maxSeconds * Double(sampleRate))
-    static let oneSecond = sampleRate
+    static let sampleRate = Segmenter.sampleRate
 
     private let transcriber: Transcriber
     private let vad: VadManager
@@ -52,14 +41,8 @@ public actor DictationSession {
     private let wake: AsyncStream<Void>
     private let wakeUp: AsyncStream<Void>.Continuation
 
-    private var samples: [Float] = []
-    private var processed = 0
-    private var vadState = VadStreamState.initial()
-    /// Per Silero chunk, whether it was speech.
-    private var speechChunks: [Bool] = []
-    private var openStart: Int?
-    /// Closed segments waiting to decode. Before the language is decided they all wait for it.
-    private var pending: [Range<Int>] = []
+    /// Its closed segments wait for the language decision before any decodes.
+    private var segmenter = Segmenter()
     private var route: (model: ModelRole, language: String)?
     private var detection: Detection?
     private var segments: [DictationResult.Segment] = []
@@ -78,7 +61,7 @@ public actor DictationSession {
 
     public func feed(_ chunk: [Float]) {
         guard !released else { return }
-        samples.append(contentsOf: chunk)
+        segmenter.append(chunk)
         startPump()
         wakeUp.yield()
     }
@@ -90,7 +73,9 @@ public actor DictationSession {
         guard !cancelled else { return }
         cancelled = true
         released = true
-        pending.removeAll()
+        segmenter.dropPending()
+        // Lets a decode in flight skip its re-decode.
+        pump?.cancel()
         wakeUp.yield()
     }
 
@@ -120,18 +105,15 @@ public actor DictationSession {
             if released { break }
         }
         guard !cancelled else { return }
-        if processed < samples.count {
-            await step(Array(samples[processed...]))
+        if let remainder = segmenter.remainder {
+            await step(remainder)
         }
-        if let start = openStart, start < samples.count {
-            close(start ..< samples.count)
+        segmenter.closeOpen()
+        if route == nil, !segmenter.pending.isEmpty {
+            await decide(on: segmenter.pending.flatMap(segmenter.audio))
         }
-        openStart = nil
-        if route == nil, !pending.isEmpty {
-            await decide(on: pending.flatMap { samples[$0] })
-        }
-        while !pending.isEmpty, !cancelled {
-            await decode(pending.removeFirst())
+        while !segmenter.pending.isEmpty, !cancelled {
+            await decode()
         }
     }
 
@@ -139,77 +121,29 @@ public actor DictationSession {
     /// decision, then decodes.
     private func drain() async {
         while !cancelled {
-            if samples.count - processed >= VadManager.chunkSize {
-                await step(Array(samples[processed ..< processed + VadManager.chunkSize]))
+            if let chunk = segmenter.nextChunk {
+                await step(chunk)
             } else if route == nil, let evidence = languageEvidence() {
                 await decide(on: evidence)
-            } else if route != nil, pending.count > (lastIsHeld ? 1 : 0) {
-                await decode(pending.removeFirst())
+            } else if route != nil, segmenter.hasReady {
+                await decode()
             } else {
                 return
             }
         }
     }
 
-    private var openLength: Int {
-        openStart.map { min(processed, samples.count) - $0 } ?? 0
-    }
-
-    /// The last closed segment waits while less than 1 s of speech follows it.
-    private var lastIsHeld: Bool { openLength < Self.oneSecond }
-
     private func step(_ chunk: [Float]) async {
-        let chunkStart = processed
-        let wasShort = openLength < Self.oneSecond
-        processed += VadManager.chunkSize
-        guard let result = try? await vad.processStreamingChunk(chunk, state: vadState, config: Self.segmentation) else {
-            // Fail open: losing dictated words is worse than decoding a chunk that holds none.
-            if openStart == nil { openStart = chunkStart }
-            speechChunks.append(true)
-            return
-        }
-        vadState = result.state
-        speechChunks.append(result.probability >= Transcriber.vadThreshold)
-        if let event = result.event {
-            if event.isStart {
-                openStart = event.sampleIndex
-            } else if let start = openStart {
-                let end = max(start, min(event.sampleIndex, samples.count))
-                openStart = nil
-                if end > start { close(start ..< end) }
-            }
-        }
-        guard openStart != nil else { return }
-        // The open segment just reached 1 s: a short segment before it joins it.
-        if wasShort, openLength >= Self.oneSecond, let last = pending.last, last.count < Self.oneSecond,
-           min(processed, samples.count) - last.lowerBound <= Self.maxSegment {
-            pending.removeLast()
-            openStart = last.lowerBound
-        }
-        // Whisper sees one 30 s window: an open segment that reaches 28 s is cut, in a pause if it can be.
-        if openLength >= Self.maxSegment, let start = openStart {
-            let cut = start + SegmentCut.cutIndex(Array(samples[start ..< min(processed, samples.count)]))
-            pending.append(start ..< cut)
-            openStart = cut
-        }
-    }
-
-    /// Queues a closed segment; under 1 s it joins the held segment before it.
-    private func close(_ range: Range<Int>) {
-        if range.count < Self.oneSecond, let last = pending.last, range.upperBound - last.lowerBound <= Self.maxSegment {
-            pending[pending.count - 1] = last.lowerBound ..< range.upperBound
-        } else {
-            pending.append(range)
-        }
+        segmenter.apply(await vad.step(chunk, segmenter.state))
     }
 
     /// The speech so far once it reaches 1 s (auto language), nil while there is less. An explicit
     /// language needs no evidence.
     private func languageEvidence() -> [Float]? {
         if case .explicit = choice { return [] }
-        let open = openStart.map { samples[$0 ..< min(processed, samples.count)] } ?? []
-        guard pending.reduce(open.count, { $0 + $1.count }) >= Self.oneSecond else { return nil }
-        return pending.flatMap { samples[$0] } + open
+        let open = segmenter.openAudio
+        guard segmenter.pending.reduce(open.count, { $0 + $1.count }) >= Segmenter.oneSecond else { return nil }
+        return segmenter.pending.flatMap(segmenter.audio) + open
     }
 
     /// Decides model and language once and pins them for this dictation.
@@ -224,20 +158,13 @@ public actor DictationSession {
         route = (await transcriber.available(decision.model), decision.language ?? "en")
     }
 
-    private func decode(_ range: Range<Int>) async {
+    private func decode() async {
         guard let route else { return }
         let clock = ContinuousClock()
         let start = clock.now
-        let audio = Array(samples[range])
-        let speech = speechSeconds(range)
-        var result = try? await transcriber.transcribe(audio, on: route.model, language: route.language)
-        var redecoded = false
-        guard !cancelled else { return }
-        if let plain = result, Truncation.isTruncated(speechSeconds: speech, tokens: plain.tokens, language: route.language),
-           let full = try? await transcriber.transcribeTimestamped(audio, on: route.model, language: route.language) {
-            result = full
-            redecoded = true
-        }
+        let (range, audio) = segmenter.takeFirst()
+        let speech = segmenter.speechSeconds(range)
+        let (result, redecoded) = await transcriber.decodeSegment(audio, speechSeconds: speech, on: route.model, language: route.language)
         guard !cancelled else { return }
         segments.append(DictationResult.Segment(audioSeconds: Double(range.count) / Double(Self.sampleRate),
                                                 speechSeconds: speech,
@@ -245,12 +172,6 @@ public actor DictationSession {
                                                 redecoded: redecoded,
                                                 decodeSeconds: (clock.now - start).seconds,
                                                 text: result?.text ?? "", failed: result == nil))
-    }
-
-    private func speechSeconds(_ range: Range<Int>) -> Double {
-        let chunk = VadManager.chunkSize
-        let chunks = (range.lowerBound / chunk) ..< min(speechChunks.count, (range.upperBound + chunk - 1) / chunk)
-        return Double(chunks.filter { speechChunks[$0] }.count * chunk) / Double(Self.sampleRate)
     }
 }
 

@@ -142,6 +142,17 @@ public actor Transcriber {
         return try await worker.run(timeout: Self.decodeTimeout) { try engine.transcribeTimestamped(samples, language: language) }
     }
 
+    /// The decode policy for one segment: the plain decode, then the timestamped re-decode when it
+    /// stopped short (BarkCore Truncation). A cancelled calling task skips the re-decode. A nil
+    /// result means the decode timed out or threw.
+    func decodeSegment(_ audio: [Float], speechSeconds: Double, on role: ModelRole, language: String) async
+        -> (result: Transcription?, redecoded: Bool) {
+        guard let plain = try? await transcribe(audio, on: role, language: language) else { return (nil, false) }
+        guard !Task.isCancelled, Truncation.isTruncated(speechSeconds: speechSeconds, tokens: plain.tokens, language: language),
+              let full = try? await transcribeTimestamped(audio, on: role, language: language) else { return (plain, false) }
+        return (full, true)
+    }
+
     /// Detection always runs on the general model: KB is a Swedish fine-tune and no fair judge.
     func detectLanguage(_ samples: [Float]) async throws -> [(language: String, probability: Double)] {
         guard let engine = engines[.general] else { throw TranscriberError.notStarted }
