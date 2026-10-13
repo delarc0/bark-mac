@@ -1,5 +1,17 @@
 # Bark-Mac — Claude Code context
 
+## Bark2 (branch bark2)
+
+The rebuild in progress; PRD, decisions and every measurement live in `tasks/bark2.md`. The rest of this file describes the shipping app on main.
+
+- `BarkKit/` is one Swift package (tools 6.2, macOS 26, Swift 6, deps pinned exact, `Package.resolved` committed):
+  - `BarkCore`, pure and dependency-free: `Routing` (KB only on explicit `sv` or a fresh detection of >= 1 s and >= 0.85; a remembered language prefills, never routes), `TextCleanup`, `SegmentCut` (28 s cut).
+  - `BarkEngine`: MLX Whisper (`Whisper`, `Engine` = decode policy), own `Vocabulary` from tokenizer.json, language detection, `ModelStore` (manifests, checksummed download), `Transcriber` actor (general model plus Swedish loaded in the background; all MLX work on one serial queue, 20 s decode timeout), `DictationSession` (one per key press: Silero v6 segments, language pinned per dictation).
+  - `mlx-eval`: the eval CLI on BarkEngine (engine-only, `--pipeline`, `--realtime 1`, `--language auto`). `bark-eval`, `stream-eval`, `fluid-eval` are frozen spike tools on WhisperKit.
+- Build and test: `cd BarkKit && swift build && swift test`. Tests that need models or eval clips skip when they are absent.
+- Models: `~/Library/Application Support/Bark/Models/<id>/{config.json,weights.safetensors,tokenizer.json}`, ids `kb-whisper-large[-8bit]` and `whisper-large-v3[-8bit]`. Not published yet (manifest URLs are a placeholder); `BarkKit/scripts/dev-models.sh` links the local eval conversions into that layout and makes the 8-bit large-v3 with `scripts/quantize.py`. 8-bit is the default (P1a: same WER as fp16, half the memory).
+- Eval: `BarkKit/eval/p1a.sh [fp16] [q8]` runs every set through `DictationSession` and gates against `eval/baseline-mlx.json`; `eval/mlx.sh` is the engine-only S8 run. Data and results stay outside git in `~/Library/Application Support/Bark/eval`. Timings only count on a full-power charger.
+
 Native macOS dictation tool. Swift/AppKit + WhisperKit. Mac-only fork of the cross-platform Python [`bark/`](../bark/) (which stays alive for Windows). Private repo: `github.com/delarc0/bark-mac`.
 
 ## Ownership / identity

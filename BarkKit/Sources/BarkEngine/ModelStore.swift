@@ -27,7 +27,8 @@ public struct ModelManifest: Sendable, Codable, Equatable {
     }
 }
 
-/// Model ids. The folders dev-models.sh links, and what the manifests download.
+/// Model ids. The folders dev-models.sh links, and what the manifests download. The 8-bit pair is
+/// the default: same WER as fp16 on every P1a set at half the memory.
 public enum ModelID {
     public static let swedish = "kb-whisper-large"
     public static let swedish8 = "kb-whisper-large-8bit"

@@ -60,9 +60,8 @@ below hold the numbers.
   no ANE in the app; the ANE-wedge self-heal and the 239 s first compile go
   away with them.
 - Models: kb-whisper-large for Swedish, whisper-large-v3 for everything
-  else, MLX safetensors. 8-bit (group 64) is the default if the pipeline
-  gate passes on every set (S8: identical on fleurs-sv, 18% faster, half the
-  memory); fp16 otherwise.
+  else, MLX safetensors, 8-bit (group 64) by default: P1a's pipeline gate
+  gave the same WER as fp16 on every set at half the memory.
 - Tokenizer: our own, read from tokenizer.json (vocab id lookups and the
   GPT-2 byte decode S8 already uses). The vendored swift-transformers
   tokenizer mis-encodes KB (S8 landmine) and is the only reason the engine
@@ -78,7 +77,9 @@ below hold the numbers.
   never route.
 - Streaming (S1): Silero v6 (FluidAudio, threshold 0.5, 0.5 s pause) closes
   segments while the key is held; each closed segment is decoded at once,
-  unprompted; release decodes only the open tail. Prompting and the confirm
+  unprompted; release decodes only the open tail. Segments start 0.3 s before
+  the chunk that crossed the threshold, and a segment under 1 s joins its
+  neighbour instead of being decoded alone (P1a). Prompting and the confirm
   loop were rejected (slower, no accuracy gain); a short length cap was
   rejected (doubles Swedish WER, S1d). Segments stay under 30 s: an open
   segment that reaches 28 s is cut at the longest pause in its last 3 s.
@@ -782,3 +783,108 @@ Verdict: the Swift engine reproduces the Python MLX numbers (WER equal on
 every route, fleurs-sv transcript-identical, 3x faster than CoreML holds). Run
 KB at 8-bit: same transcripts, 18% faster, half the memory. Not measured yet:
 power on the GPU versus the ANE (S7), and a cold load straight from disk.
+
+## P1a result (2026-10-13): BarkKit dictation library
+
+`BarkCore` (routing, text clean-up, segment cut), `BarkEngine` (the S8 engine
+as a library, own `Vocabulary`, language detection, `ModelStore`,
+`Transcriber`, `DictationSession`) and `mlx-eval --pipeline`. 36 Swift tests
+(`swift test`); the ones that need models or clips skip without them.
+`BarkKit/eval/p1a.sh` runs every set through `DictationSession` for fp16 and
+8-bit and gates against `BarkKit/eval/baseline-mlx.json` (written from the
+8-bit run). Engine-only `mlx-eval` still reproduces S8: fleurs-sv/KB 59 of 59
+transcripts identical. M5 Pro on a 100 W charger. Fast feed (whole clip,
+then release) unless marked real time.
+
+| set/route | S8 engine-only | pipeline fp16 | pipeline 8-bit |
+|-----------|----------------|---------------|----------------|
+| fleurs-sv/KB | 5.80% (59 clips) | 5.81% (5.88% on the 59) | 5.81% (5.88%) |
+| fleurs-sv/large-v3 | 9.35% (59) | 8.99% (9.19%) | 8.99% (9.19%) |
+| fleurs-en/large-v3 | 4.56% | 4.71% | 4.71% |
+| fleurs-en/KB (canary) | 63.97% | 52.60% | 52.53% |
+| dict-sv/KB | - | 5.89% | 5.89% |
+| dict-en/large-v3 | - | 4.71% | 4.71% |
+| long-sv/KB (CoreML today 17.05%) | - | 6.12% | 6.20% |
+| long-en/large-v3 (CoreML today 29.42%) | - | **15.17%** | **15.17%** |
+| noise/KB | 28 empty, 0 words | 28 empty, 0 words | 28 empty, 0 words |
+| noise/large-v3 | 0 empty, 40 words | 28 empty, **0 words** | 28 empty, 0 words |
+| short08-sv/KB, empty | 0 | 4 | 4 |
+| short08-en/large-v3, empty | 5 | 9 | 9 |
+| short25-sv, short25-en, empty | 0, 0 | 0, 0 | 0, 0 |
+| median release-to-final, fleurs-sv/KB, en/v3 | 0.63, 0.48 s (decode) | 0.59, 0.46 s | 0.51, 0.39 s |
+
+Real time (`--realtime 1`, 100 ms blocks at wall-clock pace), release to
+final text against the revised D3 (p50 < 1.0 s, p95 < 1.5 s):
+
+| set | fp16 p50 / p95 | 8-bit p50 / p95 |
+|-----|----------------|-----------------|
+| dict-sv/KB | 0.60 / 0.84 s | 0.54 / 0.96 s |
+| dict-en/large-v3 | 0.46 / 0.60 s | 0.42 / 0.53 s |
+
+`--language auto` (large-v3 detects on the first 1 s of speech, routing
+rule, model pinned for the dictation): fleurs-sv 60 of 60 clips routed to KB,
+WER 5.81%; fleurs-en 0 of 60 routed to KB, WER 4.71%; same on both variants.
+Detection probability on that 1 s: sv min 0.91 (median 0.996), en min 0.89
+(median 0.99). Memory (MLX peak): one model 3.09 GB after load and 4.02 GB
+peak at fp16, 1.66 / 2.52 GB at 8-bit; both models 6.35 / 7.11 GB at fp16,
+3.47 / 4.19 GB at 8-bit.
+
+**Decision: 8-bit is the default.** Same WER as fp16 on every set (long-sv
++0.08), 13 to 15% faster, half the memory.
+
+Gate:
+- fleurs WER: no regression over 0.3 against S8 (largest +0.15, fleurs-en).
+- noise: 0 hallucinated words on both models with Silero in front.
+- empties: short08 is above engine-only (sv 4 vs 0, en 9 vs 5), accepted as
+  S1e did. Every extra empty was a hallucination in engine-only, not lost
+  words: "Thank you." x3, "you", "Hello.", "Tack!", "Ja." for "Huhne har",
+  "Patrik Sisselsten" for "Flottornas jobb". On the sv clips Silero finds no
+  speech in an 0.8 s cut that starts mid-word; on en the decode returns
+  nothing.
+- long-sv 6.1 to 6.2% (CoreML 17.05%). long-en 15.17% (CoreML 29.42%) is the
+  open item below.
+
+Two changes to the spec, both forced by the first gate run:
+- **Sub-1 s segments join a neighbour.** The first run gave fleurs-en 4.99%
+  (+0.43, fail). Silero passed a 0.6 s click before 1700 and a 0.5 s breath
+  after 1666; decoded alone, large-v3 said "Thank you." and "you". Silero's
+  peak probability does not separate them (0.54 and 0.91). A segment under
+  1 s now joins the next one, or the previous one, which is held until 1 s of
+  speech follows it, so a real "ja" on its own still decodes. A short final
+  segment can make the release decode a little longer; D3 holds.
+- **0.3 s speech padding, not 0.1.** FluidAudio starts a segment at the
+  256 ms chunk that crossed the threshold minus the padding, so 0.1 s cut word
+  onsets. 0.3 s: fleurs-en 4.85% to 4.71%, short08-en empties 11 to 9,
+  fleurs-sv unchanged.
+
+Open, needs a call: **long-en drops whole sentences.** In 1708, 1712 and
+1716 large-v3 stops after the first sentence of a segment that holds the
+seam between two spliced FLEURS recordings (another speaker and room), for
+segments as short as 7 s. Caps do not fix it (15 s: 11.9% en, 6.7% sv; 10 s:
+12.7%, 7.9%); KB on long-sv barely shows it. S1c's timestamped decode got
+7.72% on this set. Options: timestamp decoding with a seek loop in the engine
+for segments over some length (engine work plus a measurement, since
+timestamps cost about a point on short clips in S1c), or recordings of
+Erik's real long dictations to show whether a single speaker triggers it at
+all. Until then the 28 s cut stands.
+
+Landmines:
+- `swift test` runs inside an .xctest bundle where MLX does not find SwiftPM's
+  metallib bundle; the engine tests set `GPU.metallib` (Fixtures.swift).
+- FluidAudio asserts `speechPadding <= minSpeechDuration` in debug builds;
+  the session sets minSpeechDuration 0.3, which the streaming path ignores.
+- `VadManager()` downloads the Silero model from Hugging Face on first use
+  when it is missing; P1b should ship or store it like the Whisper models.
+- The first decode in a fresh binary compiles the Metal shaders: 1.3 to
+  16 s measured today (16 s on a 30 W charger at 8% battery, which also made
+  every decode about 5x slower). Warm-up has its own 120 s timeout so a cold
+  first launch cannot fail; dictation decodes keep 20 s.
+- MLXArray is not thread safe: all model work, loads included, runs on one
+  serial queue. A background KB load therefore delays a dictation decode that
+  arrives during it (0.5 to 1.3 s with warm page cache).
+- The decode timeout counts uptime, so system sleep does not trip it, but
+  wall-clock timings span sleep: a run during a lid-closed sleep showed
+  "decodes" of 67 to 335 s (rerun clean).
+- WhisperKit's WAV loader drops the last sample of some clips (float
+  rounding of the end time); mlx-eval now reads the whole file.
+
