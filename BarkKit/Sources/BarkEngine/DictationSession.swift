@@ -5,6 +5,11 @@ import Foundation
 public struct DictationResult: Sendable {
     public struct Segment: Sendable {
         public let audioSeconds: Double
+        /// Silero speech in the segment: its 256 ms chunks at or over the threshold.
+        public let speechSeconds: Double
+        public let tokens: Int
+        /// The plain decode stopped short (BarkCore Truncation) and this is the timestamped re-decode.
+        public let redecoded: Bool
         public let decodeSeconds: Double
         public let text: String
         /// The decode timed out or threw; its text is lost and the session went on without it.
@@ -50,6 +55,8 @@ public actor DictationSession {
     private var samples: [Float] = []
     private var processed = 0
     private var vadState = VadStreamState.initial()
+    /// Per Silero chunk, whether it was speech.
+    private var speechChunks: [Bool] = []
     private var openStart: Int?
     /// Closed segments waiting to decode. Before the language is decided they all wait for it.
     private var pending: [Range<Int>] = []
@@ -142,9 +149,11 @@ public actor DictationSession {
         guard let result = try? await vad.processStreamingChunk(chunk, state: vadState, config: Self.segmentation) else {
             // Fail open: losing dictated words is worse than decoding a chunk that holds none.
             if openStart == nil { openStart = chunkStart }
+            speechChunks.append(true)
             return
         }
         vadState = result.state
+        speechChunks.append(result.probability >= Transcriber.vadThreshold)
         if let event = result.event {
             if event.isStart {
                 openStart = event.sampleIndex
@@ -203,10 +212,27 @@ public actor DictationSession {
         guard let route else { return }
         let clock = ContinuousClock()
         let start = clock.now
-        let result = try? await transcriber.transcribe(Array(samples[range]), on: route.model, language: route.language)
+        let audio = Array(samples[range])
+        let speech = speechSeconds(range)
+        var result = try? await transcriber.transcribe(audio, on: route.model, language: route.language)
+        var redecoded = false
+        if let plain = result, Truncation.isTruncated(speechSeconds: speech, tokens: plain.tokens, language: route.language),
+           let full = try? await transcriber.transcribeTimestamped(audio, on: route.model, language: route.language) {
+            result = full
+            redecoded = true
+        }
         segments.append(DictationResult.Segment(audioSeconds: Double(range.count) / Double(Self.sampleRate),
+                                                speechSeconds: speech,
+                                                tokens: result?.tokens ?? 0,
+                                                redecoded: redecoded,
                                                 decodeSeconds: (clock.now - start).seconds,
                                                 text: result?.text ?? "", failed: result == nil))
+    }
+
+    private func speechSeconds(_ range: Range<Int>) -> Double {
+        let chunk = VadManager.chunkSize
+        let chunks = (range.lowerBound / chunk) ..< min(speechChunks.count, (range.upperBound + chunk - 1) / chunk)
+        return Double(chunks.filter { speechChunks[$0] }.count * chunk) / Double(Self.sampleRate)
     }
 }
 

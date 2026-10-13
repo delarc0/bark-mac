@@ -72,6 +72,19 @@ struct SessionTests {
         #expect(!result.text.hasPrefix("Thank you") && !result.text.hasSuffix(" You"))
     }
 
+    /// The re-decode for cut-short segments must transcribe a clean clip like the plain decode does.
+    @Test(.enabled(if: Fixtures.clipsInstalled))
+    func timestampedDecodeAgreesOnACleanClip() async throws {
+        let transcriber = try await Fixtures.transcriber.value
+        let audio = try Fixtures.clip("fleurs-en", "1660")
+        let plain = try await transcriber.transcribe(audio, on: .general, language: "en")
+        let timestamped = try await transcriber.transcribeTimestamped(audio, on: .general, language: "en")
+        let words = { (text: String) in Set(text.lowercased().split(whereSeparator: { !$0.isLetter })) }
+        let shared = words(plain.text).intersection(words(timestamped.text)).count
+        #expect(Double(shared) >= 0.9 * Double(words(plain.text).count))
+        #expect(!timestamped.text.contains("<|"))
+    }
+
     @Test(.enabled(if: Fixtures.clipsInstalled))
     func longDictationIsCutUnder30Seconds() async throws {
         let audio = try Fixtures.clip("long-sv")

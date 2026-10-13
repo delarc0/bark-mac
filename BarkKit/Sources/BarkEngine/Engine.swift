@@ -26,6 +26,8 @@ public final class Engine: @unchecked Sendable {
     let suppress: MLXArray
     let suppressAllowingNoSpeech: MLXArray
     let languageMask: MLXArray
+    /// -inf on every text token, 0 on the timestamps.
+    let textMask: MLXArray
 
     /// A model folder: config.json, weights.safetensors (fp16 or quantized), tokenizer.json.
     public convenience init(folder: URL) throws {
@@ -45,6 +47,7 @@ public final class Engine: @unchecked Sendable {
         suppressAllowingNoSpeech = mask(vocabulary.nonSpeech.union(specials))
         suppress = mask(vocabulary.nonSpeech.union(specials).union([vocabulary.noSpeech]))
         languageMask = mask(Set(0 ..< vocab).subtracting(vocabulary.languageTokens))
+        textMask = mask(Set(0 ..< vocabulary.timestampBegin))
     }
 
     public func transcribe(_ samples: [Float], language: String) throws -> Transcription {
@@ -58,17 +61,110 @@ public final class Engine: @unchecked Sendable {
         // on audio of 1 s or more and treat a decode that opens with it as empty. Under 1 s KB also
         // says it on real short speech, so it stays suppressed there.
         let allowNoSpeech = Double(samples.count) / Double(sampleRate) >= 1.0
-        var result = decode(features, initial: initial, temperature: 0, allowNoSpeech: allowNoSpeech)
+        let result = decodeWithFallback(features, initial: initial, allowNoSpeech: allowNoSpeech, timestamps: false)
+        let text = isSilent(result, allowNoSpeech: allowNoSpeech)
+            ? "" : vocabulary.text(result.tokens.filter { $0 < vocabulary.eot }).trimmingCharacters(in: .whitespacesAndNewlines)
+        return Transcription(text: text, tokens: result.tokens.count, temperature: result.temperature)
+    }
+
+    /// mlx_whisper.transcribe with timestamps: the same fallback ladder, no-speech policy and no
+    /// conditioning on earlier text, plus its seek loop, so a window that ends before the audio
+    /// does carries on from its last timestamp. The re-decode for a decode that stopped short.
+    /// `tokens` counts every sampled token over all windows.
+    public func transcribeTimestamped(_ samples: [Float], language: String) throws -> Transcription {
+        let initial = [vocabulary.sot, try vocabulary.language(language), vocabulary.transcribe]
+        let mel = model.logMel(samples)
+        let content = mel.dim(0) - nFrames
+        var seek = 0
+        var kept: [Int] = []
+        var sampled = 0
+        var temperature: Float = 0
+        while seek < content {
+            let frames = min(nFrames, content - seek)
+            let features = model.encoder(model.melWindow(mel, from: seek, frames: frames))
+            let allowNoSpeech = Double(frames * hopLength) / Double(sampleRate) >= 1.0
+            let result = decodeWithFallback(features, initial: initial, allowNoSpeech: allowNoSpeech, timestamps: true)
+            sampled += result.tokens.count
+            temperature = max(temperature, result.temperature)
+            if isSilent(result, allowNoSpeech: allowNoSpeech) {
+                seek += frames
+                continue
+            }
+            let window = Self.timestampedWindow(result.tokens, timestampBegin: vocabulary.timestampBegin, frames: frames)
+            kept += window.kept
+            seek += window.advance
+        }
+        let text = vocabulary.text(kept.filter { $0 < vocabulary.eot }).trimmingCharacters(in: .whitespacesAndNewlines)
+        return Transcription(text: text, tokens: sampled, temperature: temperature)
+    }
+
+    private func decodeWithFallback(_ features: MLXArray, initial: [Int], allowNoSpeech: Bool, timestamps: Bool) -> Decoded {
+        func run(_ t: Float) -> Decoded {
+            timestamps
+                ? decodeTimestamped(features, initial: initial, temperature: t, allowNoSpeech: allowNoSpeech)
+                : decode(features, initial: initial, temperature: t, allowNoSpeech: allowNoSpeech)
+        }
+        var result = run(0)
         for t in temperatures.dropFirst() {
             var needsFallback = result.compressionRatio > 2.4 || result.avgLogprob < -1.0
             if result.noSpeechProb > 0.6 { needsFallback = false }
             if !needsFallback { break }
-            result = decode(features, initial: initial, temperature: t, allowNoSpeech: allowNoSpeech)
+            result = run(t)
         }
-        let silent = (result.noSpeechProb > 0.6 && !(result.avgLogprob > -1.0))
+        return result
+    }
+
+    private func isSilent(_ result: Decoded, allowNoSpeech: Bool) -> Bool {
+        (result.noSpeechProb > 0.6 && !(result.avgLogprob > -1.0))
             || (allowNoSpeech && result.tokens.first == vocabulary.noSpeech)
-        let text = silent ? "" : vocabulary.text(result.tokens.filter { $0 < vocabulary.eot }).trimmingCharacters(in: .whitespacesAndNewlines)
-        return Transcription(text: text, tokens: result.tokens.count, temperature: result.temperature)
+    }
+
+    /// transcribe()'s reading of one timestamped window of `frames` mel frames: the tokens it
+    /// keeps, and how far to seek. Consecutive timestamps close segments; an unfinished last
+    /// segment is dropped and the next window starts at its opening timestamp. A segment whose
+    /// start and end timestamps are equal is cleared. The seek always moves forward.
+    static func timestampedWindow(_ tokens: [Int], timestampBegin: Int, frames: Int) -> (kept: [Int], advance: Int) {
+        let isTimestamp = tokens.map { $0 >= timestampBegin }
+        let singleEnding = isTimestamp.count >= 2 && Array(isTimestamp.suffix(2)) == [false, true]
+        var slices = isTimestamp.indices.dropLast().filter { isTimestamp[$0] && isTimestamp[$0 + 1] }.map { $0 + 1 }
+        guard !slices.isEmpty else { return (tokens, frames) }
+        if singleEnding { slices.append(tokens.count) }
+        var kept: [Int] = []
+        var last = 0
+        for slice in slices {
+            let segment = tokens[last ..< slice]
+            if segment.first != segment.last { kept += segment }
+            last = slice
+        }
+        // mel frames per timestamp step (0.02 s): N_FRAMES / n_audio_ctx.
+        let advance = singleEnding ? frames : (tokens[last - 1] - timestampBegin) * 2
+        return (kept, advance > 0 ? advance : frames)
+    }
+
+    /// OpenAI whisper's ApplyTimestampRules as an additive mask for the next token after `sampled`.
+    /// mlx_whisper 0.4.3 collects positions instead of token values for the "timestamps never
+    /// decrease" rule, which makes it a no-op; this is the intended rule.
+    static func timestampMask(after sampled: [Int], timestampBegin: Int, eot: Int, noTimestamps: Int, vocab: Int,
+                              maxInitialTimestamp: Int = 50) -> [Float] {
+        var mask = [Float](repeating: 0, count: vocab)
+        func block(_ range: Range<Int>) {
+            for i in range.clamped(to: 0 ..< vocab) { mask[i] = -.infinity }
+        }
+        mask[noTimestamps] = -.infinity
+        let lastWasTimestamp = (sampled.last ?? -1) >= timestampBegin
+        let penultimateWasTimestamp = sampled.count < 2 || sampled[sampled.count - 2] >= timestampBegin
+        if lastWasTimestamp {
+            if penultimateWasTimestamp { block(timestampBegin ..< vocab) } else { block(0 ..< eot) }
+        }
+        if let lastTimestamp = sampled.last(where: { $0 >= timestampBegin }) {
+            // Never decrease, and a segment that just opened must not close at the same time.
+            block(timestampBegin ..< (lastWasTimestamp && !penultimateWasTimestamp ? lastTimestamp : lastTimestamp + 1))
+        }
+        if sampled.isEmpty {
+            block(0 ..< timestampBegin)
+            block((timestampBegin + maxInitialTimestamp + 1) ..< vocab)
+        }
+        return mask
     }
 
     /// mlx_whisper detect_language: one decoder step on [sot] after encoding, softmax over the
@@ -132,6 +228,47 @@ public final class Engine: @unchecked Sendable {
         return Decoded(tokens: sampled,
                        avgLogprob: Double(sumLogprob) / Double(sampled.count + 1),
                        noSpeechProb: noSpeechProb.item(Float.self),
+                       compressionRatio: compressionRatio(text),
+                       temperature: temperature)
+    }
+}
+
+extension Engine {
+    /// The timestamped decode: one token per step, because the timestamp rules for the next token
+    /// depend on the one just sampled (the plain decode overlaps the two).
+    private func decodeTimestamped(_ features: MLXArray, initial: [Int], temperature: Float, allowNoSpeech: Bool) -> Decoded {
+        let suppress = allowNoSpeech ? suppressAllowingNoSpeech : suppress
+        let begin = vocabulary.timestampBegin
+        let vocab = model.dims.n_vocab
+        var sampled: [Int] = []
+        var sumLogprob: Float = 0
+        var noSpeechProb: Float = 0
+        var cache: [BlockCache]?
+        var input = initial
+        for step in 0 ..< sampleLength {
+            let (out, nextCache) = model.decoder(MLXArray(input.map(Int32.init)).expandedDimensions(axis: 0), xa: features, cache: cache)
+            cache = nextCache
+            let all = out[0].asType(.float32)
+            if step == 0 { noSpeechProb = softmax(all[0], axis: -1)[vocabulary.noSpeech].item(Float.self) }
+            var logits = all[all.dim(0) - 1] + suppress
+            if step == 0 { logits = logits + suppressBlank }
+            logits = logits + MLXArray(Self.timestampMask(after: sampled, timestampBegin: begin, eot: vocabulary.eot,
+                                                          noTimestamps: vocabulary.noTimestamps, vocab: vocab))
+            // If the timestamps together are likelier than any text token, sample a timestamp.
+            let logprobs = logits - logSumExp(logits, axis: -1, keepDims: true)
+            let timestampLikelier = logSumExp(logprobs[begin...], axis: -1) .> logprobs[..<begin].max()
+            logits = which(timestampLikelier, logits + textMask, logits)
+            let next = temperature == 0 ? argMax(logits, axis: -1) : categorical(logits / temperature)
+            let token = next.item(Int.self)
+            sumLogprob += (logits - logSumExp(logits, axis: -1, keepDims: true))[next].item(Float.self)
+            if token == vocabulary.eot { break }
+            sampled.append(token)
+            input = [token]
+        }
+        let text = vocabulary.text(sampled.filter { $0 < begin }).trimmingCharacters(in: .whitespacesAndNewlines)
+        return Decoded(tokens: sampled,
+                       avgLogprob: Double(sumLogprob) / Double(sampled.count + 1),
+                       noSpeechProb: noSpeechProb,
                        compressionRatio: compressionRatio(text),
                        temperature: temperature)
     }

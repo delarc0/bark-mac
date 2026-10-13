@@ -119,6 +119,12 @@ public actor Transcriber {
         return try await worker.run(timeout: Self.decodeTimeout) { try engine.transcribe(samples, language: language) }
     }
 
+    /// The timestamped re-decode with a seek loop, for a decode that stopped short.
+    func transcribeTimestamped(_ samples: [Float], on role: ModelRole, language: String) async throws -> Transcription {
+        guard let engine = engines[role] ?? engines[.general] else { throw TranscriberError.notStarted }
+        return try await worker.run(timeout: Self.decodeTimeout) { try engine.transcribeTimestamped(samples, language: language) }
+    }
+
     /// Detection always runs on the general model: KB is a Swedish fine-tune and no fair judge.
     func detectLanguage(_ samples: [Float]) async throws -> [(language: String, probability: Double)] {
         guard let engine = engines[.general] else { throw TranscriberError.notStarted }

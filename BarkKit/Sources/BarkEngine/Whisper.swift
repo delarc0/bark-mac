@@ -195,6 +195,22 @@ final class Whisper: Module {
     /// exactly like transcribe(): content frames, zero-padded (in the log-mel domain) to 3000.
     /// Shape [1, 3000, n_mels], float16.
     func melSegment(_ samples: [Float]) -> MLXArray {
+        let mel = logMel(samples)
+        return melWindow(mel, from: 0, frames: min(nFrames, mel.dim(0) - nFrames))
+    }
+
+    /// transcribe()'s mel_segment for a seek: `frames` content frames from `seek`, zero-padded to
+    /// 3000. Shape [1, 3000, n_mels], float16.
+    func melWindow(_ mel: MLXArray, from seek: Int, frames: Int) -> MLXArray {
+        let segment = frames < nFrames
+            ? concatenated([mel[seek ..< seek + frames], MLXArray.zeros([nFrames - frames, dims.n_mels])], axis: 0)
+            : mel[seek ..< seek + nFrames]
+        return segment.asType(.float16).expandedDimensions(axis: 0)
+    }
+
+    /// mlx_whisper.audio.log_mel_spectrogram(audio, padding: N_SAMPLES): float32 [frames, n_mels],
+    /// of which the first `frames - 3000` hold the audio (transcribe's content_frames).
+    func logMel(_ samples: [Float]) -> MLXArray {
         let x = samples + [Float](repeating: 0, count: nSamples)
         let pad = nFFT / 2
         let padded = Array(x[1 ... pad].reversed()) + x + Array(x[(x.count - pad - 1) ..< (x.count - 1)].reversed())
@@ -203,12 +219,7 @@ final class Whisper: Module {
         let magnitudes = abs(rfft(windows * window))[0 ..< (frames - 1)].square()
         var logSpec = log10(maximum(matmul(magnitudes, melFilters.T), Float(1e-10)))
         logSpec = maximum(logSpec, logSpec.max() - 8)
-        logSpec = (logSpec + 4) / 4
-        let content = logSpec.dim(0) - nFrames
-        let segment = content < nFrames
-            ? concatenated([logSpec[0 ..< content], MLXArray.zeros([nFrames - content, dims.n_mels])], axis: 0)
-            : logSpec[0 ..< nFrames]
-        return segment.asType(.float16).expandedDimensions(axis: 0)
+        return (logSpec + 4) / 4
     }
 }
 

@@ -805,7 +805,7 @@ then release) unless marked real time.
 | dict-sv/KB | - | 5.89% | 5.89% |
 | dict-en/large-v3 | - | 4.71% | 4.71% |
 | long-sv/KB (CoreML today 17.05%) | - | 6.12% | 6.20% |
-| long-en/large-v3 (CoreML today 29.42%) | - | **15.17%** | **15.17%** |
+| long-en/large-v3 (CoreML today 29.42%) | - | 15.17% (before P1a.1) | **9.90%** (P1a.1; 15.17% before) |
 | noise/KB | 28 empty, 0 words | 28 empty, 0 words | 28 empty, 0 words |
 | noise/large-v3 | 0 empty, 40 words | 28 empty, **0 words** | 28 empty, 0 words |
 | short08-sv/KB, empty | 0 | 4 | 4 |
@@ -841,8 +841,8 @@ Gate:
   "Patrik Sisselsten" for "Flottornas jobb". On the sv clips Silero finds no
   speech in an 0.8 s cut that starts mid-word; on en the decode returns
   nothing.
-- long-sv 6.1 to 6.2% (CoreML 17.05%). long-en 15.17% (CoreML 29.42%) is the
-  open item below.
+- long-sv 6.1 to 6.2% (CoreML 17.05%). long-en 15.17% (CoreML 29.42%), 9.90%
+  after P1a.1 below.
 
 Two changes to the spec, both forced by the first gate run:
 - **Sub-1 s segments join a neighbour.** The first run gave fleurs-en 4.99%
@@ -857,16 +857,70 @@ Two changes to the spec, both forced by the first gate run:
   onsets. 0.3 s: fleurs-en 4.85% to 4.71%, short08-en empties 11 to 9,
   fleurs-sv unchanged.
 
-Open, needs a call: **long-en drops whole sentences.** In 1708, 1712 and
-1716 large-v3 stops after the first sentence of a segment that holds the
-seam between two spliced FLEURS recordings (another speaker and room), for
-segments as short as 7 s. Caps do not fix it (15 s: 11.9% en, 6.7% sv; 10 s:
-12.7%, 7.9%); KB on long-sv barely shows it. S1c's timestamped decode got
-7.72% on this set. Options: timestamp decoding with a seek loop in the engine
-for segments over some length (engine work plus a measurement, since
-timestamps cost about a point on short clips in S1c), or recordings of
-Erik's real long dictations to show whether a single speaker triggers it at
-all. Until then the 28 s cut stands.
+long-en dropped whole sentences (15.17%). Shorter caps did not fix it (15 s:
+11.9% en, 6.7% sv; 10 s: 12.7%, 7.9%), so the 28 s cut stands; P1a.1 below.
+
+### P1a.1 (2026-10-13): re-decode cut-short segments with timestamps
+
+Every long-en loss sits at a splice where a FLEURS en recording 30 to 45 dB
+quieter (peak -42 to -54 dBFS, RMS -60 to -70 dB) follows a loud one. Two
+different failures:
+- **The decoder stops** (1668, 1672, 1708): the segment holds the quiet
+  recording and large-v3 without timestamps ends after the loud sentence.
+- **Silero never passes the quiet recording** (1712: "While Goma is
+  reasonably safe..." in no segment; 1716: "Due to the underwater
+  topology..."). Each alone gives Silero 8.7 s of speech; after a loud
+  recording its state does not pick them up. No decoder change can recover
+  audio it never gets, so 1712 and 1716 stay at 26% and 22%.
+
+Fix for the first: the plain decode stays the first pass. `Truncation`
+(BarkCore) flags a segment with at least 5 s of Silero speech (its 256 ms
+chunks at or over 0.5) and fewer decoded tokens per speech second than a
+per-language floor; that segment is re-decoded by `transcribeTimestamped`,
+mlx_whisper's transcribe with timestamps (seek loop from the last timestamp,
+same fallback ladder and no-speech policy, no conditioning on earlier text),
+and that result is used. OpenAI's ApplyTimestampRules, not mlx_whisper
+0.4.3's: its "timestamps never decrease" rule collects positions instead of
+token values and so never masks anything.
+
+Floors, from every 8-bit P1a set (segments with >= 5 s of speech; the KB on
+English canary checked separately):
+
+| | complete decodes: slowest / median | cut-short decodes | floor |
+|---|---|---|---|
+| en, tokens per speech second | 1.95 / 3.12 (canary slowest 1.95) | 0.85, 1.12, 1.64 | 1.8 |
+| sv | 2.72 / 4.66 | none seen | 2.3 (half the median) |
+
+Gate (p1a.sh, 8-bit):
+
+| set | WER | re-decoded segments | text vs P1a 8-bit |
+|-----|-----|---------------------|-------------------|
+| long-en/large-v3 | **9.90%** (15.17%; S1c timestamps 7.72%) | 3 (1668, 1672, 1708) | 1672, 1708 changed |
+| long-sv/KB | 6.20% (6.20%) | 0 | 1680 differs (*) |
+| fleurs-sv/KB, /large-v3, /auto | 5.81%, 8.99%, 5.81% | 0 | identical |
+| fleurs-en/large-v3, /KB canary, /auto | 4.71%, 52.53%, 4.71% | 0 | identical |
+| dict-sv, dict-en (fast and real time) | 5.89%, 4.71% | 0 | identical |
+| short08-sv, short25-sv, short25-en | 4, 0, 0 empty | 0 | identical |
+| short08-en | 9 empty | 0 | 1675 differs (*) |
+| noise, both models | 0 hallucinated words | 0 | identical |
+
+(*) Not the re-decode, which never fired there: both clips also differ
+between two runs made before this change. They are decoded at a fallback
+temperature, which samples.
+
+- 1708 went from 45% to 3.7% (all four sentences back). 1672 (58% before)
+  gets the dropped sentences back except the first words of one ("During the
+  Revolutionary War, the 13 states"); the rest of its 17% is the normaliser
+  stripping a parenthesised "(which can cause shrinkage...)" from the
+  reference that the speaker does say. 1668 still misses 7 words.
+- The re-decode decodes one token per step (the timestamp rules need the
+  token just sampled), so it costs more than the plain decode it follows.
+  Real time dict release-to-final: 0.41 / 0.52 s en, 0.51 / 0.66 s sv. The
+  fast-feed medians in this run are about 2x the earlier 8-bit run while
+  another build ran on the Mac; the real-time ones did not move.
+- What is left on long-en is Silero after a 40 dB level drop between two
+  recordings, which one speaker on one mic should not produce. Worth a check
+  on Erik's real long dictations before any VAD work.
 
 Landmines:
 - `swift test` runs inside an .xctest bundle where MLX does not find SwiftPM's

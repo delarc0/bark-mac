@@ -165,6 +165,9 @@ if !pipeline {
         let parts: [String]
         let segment_decode_seconds: [Double]
         let segment_audio_seconds: [Double]
+        let segment_speech_seconds: [Double]
+        let segment_tokens: [Int]
+        let redecoded_segments: Int
         let failed_segments: Int
         let decode_seconds: Double
         let release_to_final: Double
@@ -180,6 +183,9 @@ if !pipeline {
         let row = Row(id: String(clip.dropLast(4)), hypothesis: result.text, parts: result.segments.map(\.text),
                       segment_decode_seconds: result.segments.map(\.decodeSeconds),
                       segment_audio_seconds: result.segments.map(\.audioSeconds),
+                      segment_speech_seconds: result.segments.map(\.speechSeconds),
+                      segment_tokens: result.segments.map(\.tokens),
+                      redecoded_segments: result.segments.filter(\.redecoded).count,
                       failed_segments: result.segments.filter(\.failed).count,
                       decode_seconds: result.releaseToFinal, release_to_final: result.releaseToFinal,
                       audio_seconds: Double(samples.count) / 16_000, model: result.model.map { _ in routedModel(result) }, language: result.language,
