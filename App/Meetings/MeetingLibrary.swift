@@ -23,6 +23,7 @@ final class MeetingLibrary {
     private var diarizing: Task<Void, Never>?
     private var diarizingMeeting: UUID?
     private var diarizeAgain = false
+    private var models: Models?
 
     private init() {
         var store: MeetingStore?
@@ -40,6 +41,7 @@ final class MeetingLibrary {
     /// Once per launch, before a meeting can start: what a crash or quit left unfinished is listed
     /// now, so a meeting started a moment later is never mistaken for one.
     func launch(models: Models, settings: AppSettings) {
+        self.models = models
         guard let store else { return }
         let unfinished = (try? store.unfinished()) ?? []
         let log = log
@@ -71,7 +73,8 @@ final class MeetingLibrary {
     }
 
     /// Finds the speakers of every done meeting still waiting for them, one meeting at a time in
-    /// the background. Each one is sent to hq again with its speakers.
+    /// the background, splitting segments that hold two people when a voice model is loaded. Each
+    /// one is sent to hq again with its speakers.
     func diarize() {
         guard let store, let diarizer else { return }
         guard diarizing == nil else {
@@ -83,9 +86,10 @@ final class MeetingLibrary {
                 diarizeAgain = false
                 for meeting in (try? store.pendingDiarization()) ?? [] {
                     diarizingMeeting = meeting.id
+                    let transcriber = await models?.waitForTranscriber()
                     let failure = await Task.detached(priority: .utility) { () -> String? in
                         do {
-                            try await diarizer.run(meeting.id, store: store)
+                            try await diarizer.run(meeting.id, store: store, transcriber: transcriber)
                             return nil
                         } catch {
                             return String(describing: error)

@@ -1213,3 +1213,78 @@ Open:
 - The diarizer runs beside a meeting that has just started (ANE and CPU at
   utility priority); not measured against live decoding.
 - Speaker turns inside one segment (see the ceiling above).
+
+### Splitting segments at speaker changes (2026-10-16)
+
+The ceiling above is real: a pause-closed segment often holds two people and
+can only carry one speaker. Now, after diarizing, a segment whose turns show a
+second speaker is cut and re-decoded (`SegmentSplit` in BarkCore,
+`MeetingDiarizer` given the Transcriber):
+
+- Cut where two speakers' stretches of at least 1 s (`minTurn`) inside the
+  segment meet; a shorter interjection never cuts. The cut goes at the
+  quietest 10 ms point (RMS over 50 ms) within 0.25 s of the change, or in
+  the pause between the turns.
+- Pieces under 1 s join a neighbour (the segmenter's short-segment rule);
+  each piece is re-decoded with the segment's own model and language through
+  the same decode policy, and attributed on its own.
+- Never lose text: the segment stays whole when its model is not loaded, a
+  piece fails or comes back empty, or the pieces hold under 90% of its words
+  (`minWordShare`). The swap is one transaction with the speakers.
+
+Measured on the same 6 AMI meetings x 2 mics, run end to end as Bark does:
+each recording transcribed as a meeting (large-v3 8-bit, English, them stream
+for the headset mix as a call, room stream for the far mic in person), then
+the speaker pass on a copy of that store without and with splitting
+(`mlx-eval --split-eval`). Speaker accuracy = share of reference speech in
+segments whose label maps to the right person (labels mapped one to one).
+WER against AMI's manual word annotations (whole meeting in time order,
+lower case, punctuation and fillers uh/um/hmm/mm/ah/oh dropped on both
+sides); cpWER = WER per speaker under the best speaker mapping, so it counts
+both words and attribution. AMI is disfluent crosstalk and the normaliser is
+simple, so compare before and after, not the absolute WER.
+
+| | call (headset mix) | room (far mic) |
+|---|---|---|
+| speaker right, before | 68.9% | 69.0% |
+| ceiling without splitting (perfect labels on Bark's segments) | 70.2% | 70.6% |
+| **speaker right, after** | **78.7%** | **77.1%** |
+| perfect cuts at the reference changes, our diarizer | 79.8% | 79.1% |
+| perfect cuts, perfect labels | 84.1% | 84.0% |
+| WER before / after | 26.7 / **26.2** | 31.4 / **31.4** |
+| cpWER before / after | 52.2 / **36.7** | 54.2 / **42.4** |
+| words before / after | 29,688 / 29,972 | 28,699 / 28,980 |
+| segments split / pieces / kept whole | 254 / 720 / 33 of 981 | 218 / 612 / 53 of 1,026 |
+| speaker pass, s per audio hour, before / after | 11 / 93 | 12 / 92 |
+
+(The 73.8% ceiling above was a simulation on reference-built segments; on
+Bark's own Whisper segments it is 70.2 / 70.6%.) Attribution rose in all 12
+runs (EN2002a 54 to 65%, TS3003c 86 to 92%) and per-meeting WER moved by -1.1
+to +0.2 points. The split gets within 1 to 2 points of what perfect cut
+points would give with this diarizer; the rest is the diarizer itself.
+
+Thresholds from the sweep (without the word guard): `minTurn` 0.5 and 1.0 gave
+the same accuracy (79.7 / 78.7%), 1.5 and 2.0 slightly less, so 1.0. Without
+the guard the room mic's WER got worse (31.4 to 32.3): splits that lost words
+were the ones that hurt. Reverting a split whose pieces hold under 80 / 90 /
+100% of the words gave room WER 31.9 / 31.4 / 30.9 at 77.7 / 76.6 / 72.0%
+speaker accuracy; 90% is the share that keeps WER from getting worse on
+either mic at the smallest cost in accuracy (the table is the implemented
+guard, re-run).
+
+Eyeballed 20 random splits on the call mix: the cuts land between sentences
+and the pieces read naturally, for example ES2004a "...another fantastic
+PowerPoint presentation." / "Just a quick thing about what you were saying..."
+and IS1009b "Could you go back to that slide...?" / "It's actually there now.
+There on the screen." / "This one? Yeah, okay, thank you." Re-decoding a short
+piece sometimes changes a word ("the GUI" became "the Giri", "meeting" became
+"music") or drops punctuation, and sometimes recovers words the long decode
+cut off ("...look carefully into the design though."). Two neighbouring pieces
+can end up with the same speaker when the diarizer disagrees with itself.
+
+Cost: about 80 s of extra post-pass per audio hour, almost all re-decoding
+(a 90-minute meeting gets its speakers about 2 minutes later). The re-decodes
+share the MLX queue with dictation, one piece (at most 28 s of audio) at a
+time, so a dictation released during the pass can wait up to one piece's
+decode; not measured. When no voice model is loaded the pass runs without
+splitting. Swedish is unmeasured, as for S5.

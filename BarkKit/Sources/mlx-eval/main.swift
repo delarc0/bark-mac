@@ -1,6 +1,7 @@
 import AVFoundation
 import BarkCore
 import BarkEngine
+import BarkStore
 import Foundation
 import MLX
 
@@ -14,6 +15,8 @@ import MLX
 // --meeting runs the S7 meeting budget (MeetingBudget.swift).
 // --diarize runs every .wav through MeetingDiarizer with the app's bundled models, one RTTM per
 // clip (S5; score with pyannote.metrics against reference RTTMs).
+// --split-eval runs one recording through a meeting and the speaker pass with and without
+// splitting segments at speaker changes (SplitEval.swift).
 
 let usage = """
     usage: mlx-eval --model swedish|swedish8|general|general8 --language <code> --clips <dir> --out <file.jsonl>
@@ -21,6 +24,7 @@ let usage = """
            mlx-eval --pipeline [--realtime 1] --model auto|auto8 --language auto ...
            mlx-eval --meeting [--speed 10] [--minutes 90] [--sample 60] --out <file.jsonl>
            mlx-eval --diarize --clips <dir> --rttm <dir> --out <file.jsonl>
+           mlx-eval --split-eval --wav <file> --mode call|in_person --work <dir> --min-turn 1,1.5 --out <prefix>
     """
 
 func fail(_ message: String) -> Never {
@@ -32,7 +36,7 @@ var args: [String: String] = [:]
 var argv = CommandLine.arguments.dropFirst()
 while let flag = argv.popFirst() {
     guard flag.hasPrefix("--") else { fail(usage) }
-    if flag == "--pipeline" || flag == "--meeting" || flag == "--diarize" {
+    if flag == "--pipeline" || flag == "--meeting" || flag == "--diarize" || flag == "--split-eval" {
         args[String(flag.dropFirst(2))] = "1"
         continue
     }
@@ -55,11 +59,25 @@ if args["meeting"] == "1" {
     try out.close()
     exit(0)
 }
+let diarizationModels = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../App/Resources/speaker-diarization")
+if args["split-eval"] == "1" {
+    guard let wav = args["wav"], let mode = args["mode"].flatMap(MeetingMode.init(rawValue:)), let work = args["work"],
+          let out = args["out"] else { fail(usage) }
+    let minTurns = (args["min-turn"] ?? "1").split(separator: ",").compactMap { Double($0) }
+    let models = ModelStore()
+    guard models.isInstalled(ModelID.general8), MeetingDiarizer.modelsPresent(in: diarizationModels) else { fail("models missing") }
+    let transcriber = Transcriber(general: models.folder(ModelID.general8), swedish: nil, vad: sileroFolder)
+    try await transcriber.start()
+    try await SplitEval.run(wav: URL(fileURLWithPath: wav), mode: mode, work: URL(fileURLWithPath: work), minTurns: minTurns, out: out,
+                            transcriber: transcriber, diarizer: MeetingDiarizer(models: diarizationModels)) {
+        FileHandle.standardError.write(Data("[mlx-eval] \($0)\n".utf8))
+    }
+    exit(0)
+}
 if args["diarize"] == "1" {
     guard let clipsDir = args["clips"], let rttmDir = args["rttm"], let outPath = args["out"] else { fail(usage) }
-    let models = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../App/Resources/speaker-diarization")
-    guard MeetingDiarizer.modelsPresent(in: models) else { fail("no diarization models in \(models.path)") }
-    let diarizer = MeetingDiarizer(models: models)
+    guard MeetingDiarizer.modelsPresent(in: diarizationModels) else { fail("no diarization models in \(diarizationModels.path)") }
+    let diarizer = MeetingDiarizer(models: diarizationModels)
     try FileManager.default.createDirectory(atPath: rttmDir, withIntermediateDirectories: true)
     FileManager.default.createFile(atPath: outPath, contents: nil)
     let out = try FileHandle(forWritingTo: URL(fileURLWithPath: outPath))

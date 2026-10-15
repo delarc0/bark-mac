@@ -138,6 +138,11 @@ public actor Transcriber {
         _ = try engine.vocabulary.language(code)
     }
 
+    /// The loaded model whose id is `model`, if any.
+    func loadedRole(for model: String) -> ModelRole? {
+        [ModelRole.swedish, .general].first { engines[$0] != nil && modelID($0) == model }
+    }
+
     /// The model's id, its folder's name (kb-whisper-large-8bit).
     func modelID(_ role: ModelRole) -> String {
         (role == .swedish ? swedishFolder ?? generalFolder : generalFolder).lastPathComponent

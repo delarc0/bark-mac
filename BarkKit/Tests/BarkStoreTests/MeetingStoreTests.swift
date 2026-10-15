@@ -211,6 +211,29 @@ struct MeetingStoreTests {
         #expect(try store.segments(id).map { $0.speakerID != nil } == [false, false, true])
     }
 
+    @Test func aSplitSegmentIsReplacedByItsPieces() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "en", mode: .inPerson).id
+        let whole = try store.addSegment(Segment(stream: .room, start: 0, end: 9, text: "Ready? Yes, go.", model: "m", language: "en"), to: id)
+        let other = try store.addSegment(Segment(stream: .room, start: 10, end: 12, text: "Next.", model: "m", language: "en"), to: id)
+        try store.finish(id, endedAt: .now)
+        let pieces = [(Segment(stream: .room, start: 0, end: 4.3, text: "Ready?", model: "m", language: "en"), Optional(0)),
+                      (Segment(stream: .room, start: 4.3, end: 9, text: "Yes, go.", model: "m", language: "en", redecoded: true), Optional(1))]
+        try store.saveSpeakers(id, labels: ["Speaker 1", "Speaker 2"], assignments: [other: 0], replacing: [whole: pieces])
+        let speakers = try store.speakers(id).map(\.id)
+        let segments = try store.segments(id)
+        #expect(segments.map(\.text) == ["Ready?", "Yes, go.", "Next."])
+        #expect(segments.map(\.speakerID) == [speakers[0], speakers[1], speakers[0]])
+        #expect(segments[1].redecoded && !segments.contains { $0.id == whole })
+        // A replacement for a segment that is gone rolls everything back.
+        #expect(throws: StoreError.self) {
+            try store.saveSpeakers(id, labels: ["Speaker 1"], assignments: [:], replacing: [whole: pieces])
+        }
+        #expect(try store.segments(id).map(\.text) == ["Ready?", "Yes, go.", "Next."])
+        #expect(try store.speakers(id).map(\.id) == speakers)
+    }
+
     @Test func aDiarizationCutShortIsNotRetried() throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try MeetingStore(root: root)
@@ -261,7 +284,11 @@ struct MeetingStoreTests {
         try writer.append(samples)
         try writer.close()
         let raw = try PCM.read(store.rawAudio(meeting.id, .me), from: 0, count: samples.count)
+        let slice = try store.readAudio(meeting.id, .me, from: 70_000, count: 80_000)
         try store.archiveAudio(meeting.id)
+        // A stretch reads the same from the archive as from the PCM, short at the end.
+        #expect(try store.readAudio(meeting.id, .me, from: 70_000, count: 80_000) == slice)
+        #expect(try store.readAudio(meeting.id, .me, from: 163_800, count: 100).count == 41)
         #expect(!FileManager.default.fileExists(atPath: store.rawAudio(meeting.id, .me).path))
         let file = try AVAudioFile(forReading: store.archivedAudio(meeting.id, .me), commonFormat: .pcmFormatFloat32, interleaved: false)
         #expect(file.length == AVAudioFramePosition(samples.count))

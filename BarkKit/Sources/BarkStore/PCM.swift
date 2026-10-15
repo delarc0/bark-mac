@@ -22,6 +22,19 @@ public enum PCM {
         }
     }
 
+    /// Up to `count` samples from sample `start` of an archived stream, as float.
+    public static func readArchive(_ caf: URL, from start: Int, count: Int) throws -> [Float] {
+        let file = try AVAudioFile(forReading: caf, commonFormat: .pcmFormatFloat32, interleaved: false)
+        guard start < file.length, count > 0 else { return [] }
+        file.framePosition = AVAudioFramePosition(start)
+        let frames = AVAudioFrameCount(min(Int64(count), file.length - Int64(start)))
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else {
+            throw StoreError("cannot read \(caf.lastPathComponent)")
+        }
+        try file.read(into: buffer, frameCount: frames)
+        return Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
+    }
+
     /// Compresses `pcm` to Apple Lossless in a CAF file at `caf`, checks the CAF holds every sample,
     /// then deletes the PCM. Streams in blocks; a 90-minute stream never sits in memory.
     public static func archive(_ pcm: URL, to caf: URL) throws {
