@@ -62,6 +62,7 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         LSMinimumSystemVersion: "26.0"
         NSMicrophoneUsageDescription: "Bark captures your voice for local, on-device transcription. Audio never leaves your Mac."
+        NSAudioCaptureUsageDescription: "Bark records the other side of a call to transcribe it on this Mac."
         NSHumanReadableCopyright: "© LAB37"
         CFBundleDisplayName: $(PRODUCT_NAME)
         CFBundleShortVersionString: $(MARKETING_VERSION)

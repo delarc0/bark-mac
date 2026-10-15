@@ -52,14 +52,14 @@ public enum AudioInputs {
         property(AudioObjectID(kAudioObjectSystemObject), selector, into: &value)
     }
 
-    private static func property<T: BitwiseCopyable>(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector, into value: inout T) -> Bool {
+    static func property<T: BitwiseCopyable>(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector, into value: inout T) -> Bool {
         var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
                                                  mElement: kAudioObjectPropertyElementMain)
         var size = UInt32(MemoryLayout<T>.size)
         return AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr
     }
 
-    private static func string(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+    static func string(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
         var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
                                                  mElement: kAudioObjectPropertyElementMain)
         var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)

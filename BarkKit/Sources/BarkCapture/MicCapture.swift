@@ -43,8 +43,11 @@ public final class MicCapture {
     /// The latest buffer's peak, for the overlay's bars. 0 when not capturing.
     nonisolated public var level: Float { meter.level }
 
-    public func start(deviceUID: String?) throws -> AsyncStream<[Float]> {
+    /// `voiceProcessing` turns on Apple's echo cancellation (and its noise suppression and gain
+    /// control), for meetings on laptop speakers. Dictation leaves it off.
+    public func start(deviceUID: String?, voiceProcessing: Bool = false) throws -> AsyncStream<[Float]> {
         if running { _ = stop() }
+        try setVoiceProcessing(voiceProcessing)
         // Always bind explicitly: the input node's device is sticky, so "system default" must
         // rebind to whatever the default is now.
         let wanted = deviceUID.flatMap { AudioInputs.device(uid: $0)?.id } ?? AudioInputs.defaultID()
@@ -78,6 +81,18 @@ public final class MicCapture {
         engine.stop()
         let (frames, peak) = meter.end()
         return InputHealth.classify(frames: frames, peak: peak)
+    }
+
+    private func setVoiceProcessing(_ enabled: Bool) throws {
+        let input = engine.inputNode
+        guard input.isVoiceProcessingEnabled != enabled else { return }
+        try input.setVoiceProcessingEnabled(enabled)
+        if enabled {
+            // By default it ducks every other app's audio, the call included.
+            input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: false, duckingLevel: .min)
+        }
+        // The node runs on a different audio unit now, which has no device bound yet.
+        deviceID = nil
     }
 
     private func bind(_ id: AudioDeviceID) throws {
