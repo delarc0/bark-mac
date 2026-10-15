@@ -79,19 +79,74 @@ struct MeetingStoreTests {
         let b = try store.createMeeting(language: "en", mode: .call).id
         try store.enqueue(a)
         try store.enqueue(b)
-        try store.outboxFailed(a, error: "hq 503")
-        try store.outboxFailed(a, error: "timeout")
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(try store.outboxFailed(a, generation: 1, error: "hq 503", at: t))
+        #expect(try store.outboxFailed(a, generation: 1, error: "timeout", at: t.addingTimeInterval(60)))
         #expect(try store.pendingOutbox() == [
-            OutboxItem(meetingID: a, state: .pending, attempts: 2, lastError: "timeout"),
-            OutboxItem(meetingID: b, state: .pending, attempts: 0, lastError: nil),
+            OutboxItem(meetingID: a, state: .pending, generation: 1, attempts: 2, lastError: "timeout", lastAttemptAt: t.addingTimeInterval(60)),
+            OutboxItem(meetingID: b, state: .pending, generation: 1, attempts: 0, lastError: nil, lastAttemptAt: nil),
         ])
-        try store.outboxAcknowledged(a)
+        #expect(try store.outboxAcknowledged(a, generation: 1))
         #expect(try store.pendingOutbox().map(\.meetingID) == [b])
-        // A meeting changed after hq has it goes out again.
+        // A meeting changed after hq has it goes out again, as a new generation.
         try store.enqueue(a)
-        #expect(try store.pendingOutbox().map(\.meetingID).sorted { $0.uuidString < $1.uuidString } == [a, b].sorted { $0.uuidString < $1.uuidString })
+        #expect(try store.outboxItem(a) == OutboxItem(meetingID: a, state: .pending, generation: 2, attempts: 0, lastError: nil, lastAttemptAt: nil))
+        #expect(try Set(store.pendingOutbox().map(\.meetingID)) == [a, b])
+
+        #expect(try store.outboxRejected(b, generation: 1, message: "too long", at: t))
+        #expect(try store.pendingOutbox().map(\.meetingID) == [a])
+        #expect(try store.rejectedOutbox() == [
+            OutboxItem(meetingID: b, state: .rejected, generation: 1, attempts: 1, lastError: "too long", lastAttemptAt: t),
+        ])
+        #expect(try !store.outboxAcknowledged(b, generation: 1))
+        try store.enqueue(b)
+        #expect(try store.outboxItem(b)?.state == .pending && store.outboxItem(b)?.generation == 2 && store.rejectedOutbox().isEmpty)
         // Reopening keeps the queue.
         #expect(try MeetingStore(root: root).pendingOutbox().count == 2)
+    }
+
+    @Test func outboxIgnoresResultsForAnOlderGeneration() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "sv", mode: .call).id
+        try store.enqueue(id)
+        let uploading = try #require(try store.outboxItem(id)).generation
+        try store.enqueue(id)
+        #expect(try !store.outboxAcknowledged(id, generation: uploading))
+        #expect(try !store.outboxFailed(id, generation: uploading, error: "HTTP 503"))
+        #expect(try !store.outboxRejected(id, generation: uploading, message: "invalid"))
+        #expect(try store.pendingOutbox() == [
+            OutboxItem(meetingID: id, state: .pending, generation: uploading + 1, attempts: 0, lastError: nil, lastAttemptAt: nil),
+        ])
+    }
+
+    @Test func upgradesTheV1Outbox() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let path = root.appending(path: "bark.sqlite").path
+        let a = UUID(), b = UUID(), c = UUID()
+        do {
+            let v1 = try Database(path: path, migrations: [MeetingStore.migrations[0]])
+            #expect(v1.userVersion == 1)
+            for id in [a, b, c] {
+                try v1.run("INSERT INTO meetings (id, started_at, language, mode, status) VALUES (?, 0, 'sv', 'call', 'done')", [id.uuidString])
+            }
+            try v1.run("INSERT INTO outbox (meeting_id, state, attempts, last_error) VALUES (?, 'pending', 2, 'HTTP 503')", [c.uuidString])
+            try v1.run("INSERT INTO outbox (meeting_id, state) VALUES (?, 'acknowledged')", [a.uuidString])
+            try v1.run("INSERT INTO outbox (meeting_id, state) VALUES (?, 'pending')", [b.uuidString])
+        }
+
+        let store = try MeetingStore(root: root)
+        #expect(store.schemaVersion == 2)
+        #expect(try store.pendingOutbox() == [
+            OutboxItem(meetingID: c, state: .pending, generation: 1, attempts: 2, lastError: "HTTP 503", lastAttemptAt: nil),
+            OutboxItem(meetingID: b, state: .pending, generation: 1, attempts: 0, lastError: nil, lastAttemptAt: nil),
+        ])
+        #expect(try store.outboxItem(a)?.state == .acknowledged)
+        #expect(try store.outboxRejected(c, generation: 1, message: "too long"))
+        try store.delete(b)
+        #expect(try store.outboxItem(b) == nil)
+        #expect(try MeetingStore(root: root).schemaVersion == 2)
     }
 
     @Test func pcmAppendsSurviveAnUnclosedWriter() throws {

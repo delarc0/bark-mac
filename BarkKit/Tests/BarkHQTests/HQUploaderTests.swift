@@ -1,5 +1,5 @@
 @testable import BarkHQ
-import BarkStore
+@testable import BarkStore
 import Foundation
 import Testing
 
@@ -83,6 +83,32 @@ struct HQUploaderTests {
         #expect(server.requests.count == 2)
     }
 
+    @Test func queuedAgainDuringTheUploadIsSentAgain() async throws {
+        let test = TestSettings(), server = StubServer()
+        defer { test.cleanUp(); try? FileManager.default.removeItem(at: root) }
+        try connected(server, test)
+        let store = try MeetingStore(root: root)
+        let id = try fixtureMeeting(store)
+        let before = try #require(try store.outboxItem(id)).generation
+        // The user renames the meeting while its PUT is in flight.
+        server.respond { _, _ in
+            try? store.setTitle(id, "Renamed mid-upload")
+            try? store.enqueue(id)
+            return (201, Data())
+        }
+        let uploader = HQUploader(store: store, settings: test.settings, appVersion: "1", session: server.session)
+
+        #expect(await uploader.drain() == HQUploader.Report())
+        #expect(try store.pendingOutbox() == [
+            OutboxItem(meetingID: id, state: .pending, generation: before + 1, attempts: 0, lastError: nil, lastAttemptAt: nil),
+        ])
+
+        server.respond(status: 200)
+        #expect(await uploader.drain().acknowledged == [id])
+        #expect(String(decoding: try #require(server.requests.last?.body), as: UTF8.self).contains("Renamed mid-upload"))
+        #expect(try store.outboxItem(id)?.state == .acknowledged && store.outboxItem(id)?.generation == before + 1)
+    }
+
     @Test func backsOffPerMeeting() async throws {
         let test = TestSettings(), server = StubServer(), clock = TestClock()
         defer { test.cleanUp(); try? FileManager.default.removeItem(at: root) }
@@ -94,11 +120,15 @@ struct HQUploaderTests {
 
         #expect(await uploader.drain().retrying == [id])
         for (attempt, delay) in [60.0, 300, 1800, 7200, 21_600, 21_600].enumerated() {
-            #expect(try store.pendingOutbox().first?.attempts == attempt + 1)
-            #expect(try store.pendingOutbox().first?.lastError == "HTTP 503")
+            let item = try #require(try store.pendingOutbox().first)
+            #expect(item.attempts == attempt + 1 && item.lastError == "HTTP 503" && item.lastAttemptAt == clock.now)
             #expect(await uploader.nextRetry == clock.now.addingTimeInterval(delay))
             clock.advance(delay - 1)
             #expect(await uploader.drain() == HQUploader.Report())
+            // A relaunch keeps the backoff: it is read from the store.
+            let relaunched = HQUploader(store: try MeetingStore(root: root), settings: test.settings, appVersion: "1",
+                                        session: server.session, now: { clock.now })
+            #expect(await relaunched.drain() == HQUploader.Report())
             #expect(server.requests.count == attempt + 1)
             clock.advance(1)
             #expect(await uploader.drain().retrying == [id])
@@ -147,17 +177,18 @@ struct HQUploaderTests {
         let uploader = HQUploader(store: store, settings: test.settings, appVersion: "1", session: server.session, now: { clock.now })
 
         #expect(await uploader.drain().rejected == [id])
-        let item = try #require(try store.pendingOutbox().first)
-        #expect(item.lastError == "rejected: meeting.mode:  unknown")
-        #expect(HQUploader.isRejected(item))
+        #expect(try store.pendingOutbox().isEmpty)
+        let item = try #require(try store.rejectedOutbox().first)
+        #expect(item.meetingID == id && item.lastError == "meeting.mode:  unknown")
         clock.advance(7 * 86_400)
         #expect(await uploader.drain() == HQUploader.Report())
+        #expect(await uploader.nextRetry == nil)
         #expect(server.requests.count == 1)
 
         server.respond(status: 413)
         try store.enqueue(id)
         #expect(await uploader.drain().rejected == [id])
-        #expect(try store.pendingOutbox().first?.lastError == "rejected: HTTP 413")
+        #expect(try store.outboxItem(id)?.state == .rejected && store.outboxItem(id)?.lastError == "HTTP 413")
         #expect(server.requests.count == 2)
     }
 

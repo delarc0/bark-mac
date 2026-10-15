@@ -6,7 +6,7 @@ import Foundation
 public actor HQUploader {
     public struct Report: Sendable, Equatable {
         public var acknowledged: [UUID] = []
-        /// hq refused these for good (413 or 422); they wait for a fresh `MeetingStore.enqueue`.
+        /// hq refused these for good (413 or 422); they stay rejected until `MeetingStore.enqueue`.
         public var rejected: [UUID] = []
         /// Failed for now; retried after the backoff.
         public var retrying: [UUID] = []
@@ -16,8 +16,6 @@ public actor HQUploader {
 
     /// Delay before the next try after the nth failed attempt, then every 6 h.
     public static let backoff: [TimeInterval] = [60, 300, 1800, 7200, 21_600]
-    /// Marks an outbox item's last error as a permanent rejection.
-    public static let rejectedPrefix = "rejected: "
     static let apiVersion = "1"
     static let maxDeletions = 10_000
     static let maxResponseBytes = 2 << 20
@@ -27,7 +25,6 @@ public actor HQUploader {
     private let appVersion: String
     private let session: URLSession
     private let now: @Sendable () -> Date
-    private var retryAt: [UUID: Date] = [:]
     private var draining = false
     private var drainAgain = false
 
@@ -51,12 +48,17 @@ public actor HQUploader {
         backoff[min(max(attempts, 1), backoff.count) - 1]
     }
 
-    public static func isRejected(_ item: OutboxItem) -> Bool {
-        item.lastError?.hasPrefix(rejectedPrefix) ?? false
+    /// When a meeting that failed may be tried again; nil when it has not failed. The attempt time is
+    /// in the store, so the backoff holds across relaunches.
+    public static func retryDate(_ item: OutboxItem) -> Date? {
+        guard item.attempts > 0 else { return nil }
+        return item.lastAttemptAt.map { $0.addingTimeInterval(delay(afterAttempts: item.attempts)) } ?? .distantPast
     }
 
     /// When the earliest backed-off meeting may be tried again, for the app's timer.
-    public var nextRetry: Date? { retryAt.values.min() }
+    public var nextRetry: Date? {
+        ((try? store.pendingOutbox()) ?? []).compactMap(Self.retryDate).min()
+    }
 
     /// Sends every pending meeting whose backoff has passed, oldest first. A call while a drain runs
     /// makes that drain go round once more and returns an empty report.
@@ -72,26 +74,25 @@ public actor HQUploader {
             drainAgain = false
             guard let base = settings.baseURL, let token = settings.token(),
                   let items = try? store.pendingOutbox() else { return report }
-            for item in items where !Self.isRejected(item) {
-                let id = item.meetingID
-                if let at = retryAt[id], at > now() { continue }
+            for item in items {
+                let id = item.meetingID, generation = item.generation
+                if let at = Self.retryDate(item), at > now() { continue }
+                // A false from the store means the meeting was queued again meanwhile: it stays pending.
                 switch await put(id, base: base, token: token) {
                 case .stored:
-                    try? store.outboxAcknowledged(id)
-                    retryAt[id] = nil
-                    report.acknowledged.append(id)
+                    if (try? store.outboxAcknowledged(id, generation: generation)) == true { report.acknowledged.append(id) }
                 case .revoked:
                     settings.markNeedsReconnect()
                     report.needsReconnect = true
                     return report
                 case .rejected(let message):
-                    try? store.outboxFailed(id, error: Self.rejectedPrefix + message)
-                    retryAt[id] = nil
-                    report.rejected.append(id)
+                    if (try? store.outboxRejected(id, generation: generation, message: message, at: now())) == true {
+                        report.rejected.append(id)
+                    }
                 case .retry(let message):
-                    try? store.outboxFailed(id, error: message)
-                    retryAt[id] = now().addingTimeInterval(Self.delay(afterAttempts: item.attempts + 1))
-                    report.retrying.append(id)
+                    if (try? store.outboxFailed(id, generation: generation, error: message, at: now())) == true {
+                        report.retrying.append(id)
+                    }
                 }
             }
         } while drainAgain
@@ -159,7 +160,6 @@ public actor HQUploader {
         for id in ids {
             guard let meeting = try store.meeting(id), meeting.status == .done || meeting.status == .interrupted else { continue }
             try store.delete(id)
-            retryAt[id] = nil
             deleted.append(id)
         }
         settings.deletionsSince = response.serverTime
