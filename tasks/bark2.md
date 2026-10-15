@@ -1072,8 +1072,8 @@ Built:
   and daily, hq drained and deletions synced. A rename of a finished meeting
   re-queues it for hq.
 - Settings: Meetings tab (keep audio 7/30/90 days or forever, echo
-  cancellation, hq status, Connect to hq / Disconnect, the hq address under
-  Advanced) and, on the Model tab, removal of Bark 0.2's two CoreML folders
+  cancellation, hq status, Connect to hq / Disconnect, another hq address
+  under Advanced) and, on the Model tab, removal of Bark 0.2's two CoreML folders
   with their size and a confirm.
 
 Needs Erik's desk test:
@@ -1085,8 +1085,10 @@ Needs Erik's desk test:
 - Dictation during a meeting (two mic engines, one with voice processing).
 - Lid close and wake mid-meeting: gap row, recording continues.
 - Quit mid-meeting, relaunch: the meeting finishes, the quiet notification.
-- hq pairing end to end once hq serves `/bark/connect` (the address must be
-  typed under Advanced: the base URL stays empty by default per the PRD).
+- hq pairing end to end once hq serves `/bark/connect`. Connect to hq uses
+  https://hq.lab37.io (`HQLink.defaultBase`) unless another address is typed
+  under Advanced; the base URL is stored only on that tap, so nothing is
+  contacted before it.
 - The Model tab reads ~/Documents only when opened; a Debug build may get the
   Files and Folders prompt there.
 - Copy for approval: every new user-visible string is in the P2c report.

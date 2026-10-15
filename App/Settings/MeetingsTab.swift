@@ -32,7 +32,6 @@ struct MeetingsTab: View {
             HStack(spacing: 8) {
                 if hq.status != .connected {
                     Button("Connect to hq") { hq.connect() }
-                        .disabled(hq.baseText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 if hq.status == .connected || hq.status == .needsReconnect {
                     Button("Disconnect") { hq.disconnect() }
@@ -49,26 +48,22 @@ struct MeetingsTab: View {
             }
             DisclosureGroup("Advanced", isExpanded: $advanced) {
                 Row(label: "hq address") {
-                    TextField("https://hq.example.com", text: $hq.baseText)
+                    TextField(HQLink.defaultBase, text: $hq.baseText)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 280)
-                        .onSubmit { hq.applyBase() }
+                        .onSubmit { if hq.status != .connected { hq.connect() } }
                 }
                 .padding(.top, 6)
             }
             Spacer()
         }
         .padding(.top, 4)
-        .onAppear {
-            hq.refresh()
-            advanced = hq.status == .off
-        }
+        .onAppear { hq.refresh() }
     }
 
     private var status: String {
         switch hq.status {
-        case .off: "Off"
-        case .notConnected: hq.isPairing ? "Waiting for your approval in the browser…" : "Not connected"
+        case .off, .notConnected: hq.isPairing ? "Waiting for your approval in the browser…" : "Not connected"
         case .connected: "Connected to \(hq.host ?? "hq")"
         case .needsReconnect: "hq signed this Mac out. Connect again to keep sending meetings."
         }

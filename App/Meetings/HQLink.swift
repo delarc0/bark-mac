@@ -9,6 +9,9 @@ import os
 @MainActor
 @Observable
 final class HQLink {
+    /// LAB37's hq, used when the address field is left empty.
+    static let defaultBase = "https://hq.lab37.io"
+
     private(set) var status: HQSettings.Status = .off
     private(set) var host: String?
     /// The pairing or address problem to show, if any.
@@ -44,32 +47,24 @@ final class HQLink {
         host = settings.baseURL?.host()
     }
 
-    /// Opens hq's approval page in the browser; hq answers through bark://hq-connected.
+    /// Opens hq's approval page in the browser; hq answers through bark://hq-connected. The address
+    /// is stored only here, on the user's tap, so nothing is contacted before it.
     func connect() {
-        guard applyBase() else { return }
+        let typed = baseText.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try settings.setBaseURL(typed.isEmpty ? Self.defaultBase : typed)
+        } catch {
+            problem = "The hq address must start with https://."
+            return
+        }
+        refresh()
         do {
             NSWorkspace.shared.open(try pairing.begin())
             awaitingApproval = true
             problem = nil
         } catch {
             log.error("Pairing could not start: \(String(describing: error), privacy: .public)")
-            problem = "Set the hq address under Advanced first."
-        }
-    }
-
-    /// Saves the address field when it changed. False when it is not a valid address.
-    @discardableResult
-    func applyBase() -> Bool {
-        guard baseText.trimmingCharacters(in: .whitespacesAndNewlines) != (settings.baseURL?.absoluteString ?? "") else { return true }
-        do {
-            try settings.setBaseURL(baseText)
-            baseText = settings.baseURL?.absoluteString ?? ""
-            problem = nil
-            refresh()
-            return true
-        } catch {
-            problem = "The hq address must start with https://."
-            return false
+            problem = "Connecting to hq did not finish. Click Connect to hq to try again."
         }
     }
 
