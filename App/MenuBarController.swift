@@ -1,6 +1,7 @@
 import AVFoundation
 import AppKit
 import BarkCapture
+import BarkCore
 import os
 
 /// The status item and its menu, and the glue between dictation, models, overlay and windows.
@@ -10,6 +11,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let settings = AppSettings.shared
     private let models = Models.shared
     private let dictation: Dictation
+    let recorder: MeetingRecorder
+    private let watcher = CallWatcher()
+    private var panel: MenuBarPanel!
+    private var notesWindow: NotesWindowController?
     private let overlay: OverlayController
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
@@ -23,7 +28,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         dictation = Dictation(settings: .shared, models: .shared)
         let capture = dictation.capture
         overlay = OverlayController(settings: .shared) { capture.level }
+        recorder = MeetingRecorder(settings: .shared, models: .shared, library: .shared)
         super.init()
+        panel = MenuBarPanel { [weak self] in self?.statusItem.button?.window?.frame }
+        recorder.onStateChange = { [weak self] state in self?.meetingChanged(state) }
+        recorder.onMessage = { [weak self] message in self?.panel.show(message) }
+        watcher.onChange = { [weak self] change in self?.callChanged(change) }
 
         dictation.onStateChange = { [weak self] state in self?.dictationChanged(state) }
         dictation.onWaiting = { [weak self] download in
@@ -47,7 +57,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.delegate = self
         statusItem.menu = menu
-        updateButton(.idle)
+        updateButton()
         rebuildMenu()
         armHotkey()
         #if SPARKLE
@@ -56,6 +66,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         models.load()
         // As 0.2.x did on first launch; once per launch, so a failing network is not retried in a loop.
         models.downloadMissing()
+        MeetingLibrary.shared.launch(models: models, settings: settings)
+        watcher.resume()
 
         if !settings.onboardingCompleted {
             DispatchQueue.main.async { OnboardingWindowController.shared.present() }
@@ -65,11 +77,58 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func dictationChanged(_ state: Dictation.State) {
-        updateButton(state)
+        updateButton()
         switch state {
         case .idle: overlay.hide()
         case .recording: overlay.show(.recording)
         case .transcribing: overlay.show(.transcribing)
+        }
+    }
+
+    // MARK: Meetings
+
+    private func meetingChanged(_ state: MeetingRecorder.State) {
+        updateButton()
+        switch state {
+        case .recording:
+            watcher.pause()
+            if panel.isShowingOffer { panel.hide() }
+            if notesWindow == nil { notesWindow = NotesWindowController(model: recorder.notes) }
+            notesWindow?.show()
+        case .finishing:
+            notesWindow?.hide()
+        case .idle:
+            notesWindow?.hide()
+            watcher.resume()
+        case .starting:
+            break
+        }
+    }
+
+    private func callChanged(_ change: CallOffers.Change) {
+        switch change {
+        case .offer(let app):
+            guard recorder.state == .idle else { return }
+            panel.show(PanelMessage(title: "Record this call?", detail: Self.describe(app),
+                                    action: ("Record", { [weak self] in self?.recorder.start(callApp: app) }),
+                                    dismissTitle: "Not Now"), offer: true)
+        case .withdraw:
+            if panel.isShowingOffer { panel.hide() }
+        case .none:
+            break
+        }
+    }
+
+    /// A browser is tapped whole, every tab, and the user has to know that before recording.
+    private static func describe(_ app: CallApp) -> String {
+        app.capturesAllTabs ? "\(app.name): all of its tabs are recorded, not only the call." : app.name
+    }
+
+    private static func describe(_ plan: MeetingCapturePlan) -> String {
+        switch plan {
+        case .app(let app, _): app.capturesAllTabs ? "\(app.name), all tabs recorded" : "\(app.name) call"
+        case .allSystemAudio: "Call, all system audio"
+        case .microphone: "In person, microphone only"
         }
     }
 
@@ -157,10 +216,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: Status item
 
-    private func updateButton(_ state: Dictation.State) {
+    /// Dictation shows over a meeting: it is the shorter, more urgent state.
+    private func updateButton() {
         guard let button = statusItem.button else { return }
         button.title = ""
-        switch state {
+        switch dictation.state {
         case .recording:
             button.toolTip = "Bark: recording"
             button.image = Self.recordingDot
@@ -168,6 +228,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // Without this an overlay-off user gets no feedback after release.
             button.toolTip = "Bark: transcribing"
             button.image = Self.transcribingDot
+        case .idle where recorder.state != .idle:
+            if case .recording = recorder.state {
+                button.toolTip = "Bark: recording a meeting"
+                button.image = Self.meetingRing
+            } else {
+                button.toolTip = recorder.state == .starting ? "Bark: starting a meeting" : "Bark: finishing the meeting"
+                button.image = Self.transcribingDot
+            }
         case .idle:
             button.toolTip = "Bark: local dictation"
             button.image = Self.icon
@@ -183,6 +251,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private static let recordingDot = dot(NSColor(BarkPalette.recordingRed))
     private static let transcribingDot = dot(NSColor(BarkPalette.transcribingAmber))
+
+    // A ring around the dot, so a meeting reads apart from a dictation at a glance.
+    private static let meetingRing = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { _ in
+        let red = NSColor(BarkPalette.recordingRed)
+        red.setStroke()
+        let ring = NSBezierPath(ovalIn: NSRect(x: 1.75, y: 1.75, width: 12.5, height: 12.5))
+        ring.lineWidth = 1.5
+        ring.stroke()
+        red.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 5, y: 5, width: 6, height: 6)).fill()
+        return true
+    }
 
     private static func dot(_ color: NSColor) -> NSImage {
         NSImage(size: NSSize(width: 16, height: 16), flipped: false) { _ in
@@ -217,6 +297,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let line = modelLine() { menu.addItem(line) }
         menu.addItem(.separator())
 
+        meetingItems().forEach(menu.addItem)
+        menu.addItem(.separator())
+
         menu.addItem(historyItem())
         menu.addItem(devicesItem())
         menu.addItem(.separator())
@@ -240,6 +323,55 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .missing: return item("Voice model not installed…", #selector(openModels))
         case .failed: return item("Model failed to load: Retry", #selector(retryModels))
         }
+    }
+
+    private func meetingItems() -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        switch recorder.state {
+        case .idle:
+            let start = item("Start Meeting", #selector(startMeeting))
+            start.subtitle = "\(Self.describe(recorder.upcomingPlan())) · \(Languages.name(settings.nextMeetingLanguage))"
+            items += [start, nextMeetingItem()]
+        case .starting:
+            items.append(disabled("Starting meeting…"))
+        case .recording(let since):
+            let stop = item("Stop Meeting", #selector(stopMeeting))
+            stop.subtitle = "Recording \(TranscriptText.timestamp(Date.now.timeIntervalSince(since)))"
+            items += [stop, item("Show Notes", #selector(showNotes))]
+        case .finishing:
+            items.append(disabled("Finishing meeting…"))
+        }
+        items.append(item("Meetings…", #selector(openMeetings)))
+        return items
+    }
+
+    private func nextMeetingItem() -> NSMenuItem {
+        let parent = NSMenuItem(title: "Next Meeting", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.addItem(.sectionHeader(title: "Language"))
+        let current = settings.nextMeetingLanguage
+        for language in Languages.common {
+            let row = item(language.label, #selector(pickMeetingLanguage(_:)))
+            row.representedObject = language.code
+            row.state = language.code == current ? .on : .off
+            submenu.addItem(row)
+        }
+        submenu.addItem(.separator())
+        submenu.addItem(.sectionHeader(title: "Audio"))
+        let modes: [(MeetingModeChoice, String)] = [(.automatic, "Automatic"), (.call, "Call"), (.inPerson, "In Person")]
+        for (mode, title) in modes {
+            let row = item(title, #selector(pickMeetingMode(_:)))
+            row.representedObject = mode.rawValue
+            row.state = recorder.nextMode == mode ? .on : .off
+            switch mode {
+            case .automatic: row.subtitle = "Records a call when one is detected"
+            case .call: row.subtitle = "Microphone and the call's audio"
+            case .inPerson: row.subtitle = "Microphone only"
+            }
+            submenu.addItem(row)
+        }
+        parent.submenu = submenu
+        return parent
     }
 
     private func historyItem() -> NSMenuItem {
@@ -287,6 +419,33 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     // MARK: Actions
+
+    @objc private func startMeeting() {
+        panel.hide()
+        recorder.start()
+    }
+
+    @objc private func stopMeeting() {
+        recorder.stop()
+    }
+
+    @objc private func showNotes() {
+        notesWindow?.show()
+        NSApp.activate()
+        notesWindow?.window?.makeKey()
+    }
+
+    @objc private func openMeetings() {
+        MeetingsWindowController.shared.present(selecting: recorder.meetingID)
+    }
+
+    @objc private func pickMeetingLanguage(_ sender: NSMenuItem) {
+        settings.meetingLanguage = sender.representedObject as? String
+    }
+
+    @objc private func pickMeetingMode(_ sender: NSMenuItem) {
+        recorder.nextMode = (sender.representedObject as? String).flatMap(MeetingModeChoice.init(rawValue:)) ?? .automatic
+    }
 
     @objc private func copyEntry(_ sender: NSMenuItem) {
         guard let text = sender.representedObject as? String else { return }
@@ -344,6 +503,8 @@ enum SystemSettings {
     enum Pane: String {
         case microphone = "Privacy_Microphone"
         case accessibility = "Privacy_Accessibility"
+        // Screen & System Audio Recording, which holds the system-audio-only list too.
+        case systemAudio = "Privacy_ScreenCapture"
     }
 
     static func open(_ pane: Pane) {

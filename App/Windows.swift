@@ -34,11 +34,17 @@ class AppWindowController: NSWindowController {
 final class SettingsWindowController: AppWindowController {
     static let shared = SettingsWindowController()
 
+    private let selection: SettingsSelection
+
     private init() {
-        super.init(title: "Bark Settings", styleMask: [.titled, .closable, .miniaturizable], content: SettingsView(settings: .shared))
+        let selection = SettingsSelection()
+        self.selection = selection
+        super.init(title: "Bark Settings", styleMask: [.titled, .closable, .miniaturizable],
+                   content: SettingsView(settings: .shared, selection: selection, hq: MeetingLibrary.shared.hq))
     }
 
-    func present() {
+    func present(tab: SettingsTab? = nil) {
+        if let tab { selection.tab = tab }
         bringForward()
     }
 }

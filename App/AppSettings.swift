@@ -45,6 +45,9 @@ final class AppSettings {
         static let vocabulary = "bark2.vocabulary"
         static let axWasGranted = "bark2.axWasGranted"
         static let micWasGranted = "bark2.micWasGranted"
+        static let meetingLanguage = "bark2.meetingLanguage"
+        static let audioRetentionDays = "bark2.audioRetentionDays"
+        static let echoCancellation = "bark2.echoCancellation"
     }
 
     /// Called after the hotkey changes, so the event tap can rebind.
@@ -110,6 +113,25 @@ final class AppSettings {
         didSet { defaults.set(vocabulary, forKey: Key.vocabulary) }
     }
 
+    /// The last meeting's language, or the one picked for the next; nil before the first meeting.
+    var meetingLanguage: String? {
+        didSet { defaults.set(meetingLanguage, forKey: Key.meetingLanguage) }
+    }
+
+    var audioRetention: AudioRetention {
+        didSet { defaults.set(audioRetention.rawValue, forKey: Key.audioRetentionDays) }
+    }
+
+    /// Takes effect on the next meeting.
+    var echoCancellation: Bool {
+        didSet { defaults.set(echoCancellation, forKey: Key.echoCancellation) }
+    }
+
+    /// The language a meeting started now records in.
+    var nextMeetingLanguage: String {
+        MeetingDefaults.language(last: meetingLanguage, dictation: language, swedishModel: swedishModelEnabled)
+    }
+
     // Truth lives in SMAppService, not UserDefaults: the user can flip it in System Settings too.
     var launchAtLogin: Bool {
         didSet {
@@ -167,6 +189,9 @@ final class AppSettings {
         darkOverlay = defaults.object(forKey: Key.darkOverlay) as? Bool ?? true
         cleanupEnabled = defaults.object(forKey: Key.cleanup) as? Bool ?? true
         vocabulary = defaults.dictionary(forKey: Key.vocabulary) as? [String: String] ?? [:]
+        meetingLanguage = defaults.string(forKey: Key.meetingLanguage)
+        audioRetention = AudioRetention(days: defaults.object(forKey: Key.audioRetentionDays) as? Int)
+        echoCancellation = defaults.object(forKey: Key.echoCancellation) as? Bool ?? true
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
@@ -176,5 +201,18 @@ final class AppSettings {
         language == .explicit("sv")
             || Locale.preferredLanguages.contains { Locale(identifier: $0).language.languageCode?.identifier == "sv" }
             || Locale.current.region?.identifier == "SE"
+    }
+}
+
+/// The languages offered by name in Settings and the meeting menu.
+enum Languages {
+    static let common: [(code: String, label: String)] = [
+        ("en", "English"), ("sv", "Swedish"), ("de", "German"), ("fr", "French"), ("es", "Spanish"),
+        ("it", "Italian"), ("no", "Norwegian"), ("da", "Danish"), ("nl", "Dutch"), ("pt", "Portuguese"),
+        ("ja", "Japanese"),
+    ]
+
+    static func name(_ code: String) -> String {
+        common.first { $0.code == code }?.label ?? code.uppercased()
     }
 }
