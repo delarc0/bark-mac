@@ -26,8 +26,9 @@ public enum TapError: Error, CustomStringConvertible {
 
 /// The other side of a call: a Core Audio process tap on the call app's processes, or on every
 /// process but Bark, read through a private aggregate device and delivered like MicCapture, as
-/// 16 kHz mono Float32 chunks in order on the stream start() returns. The tap's stereo mix goes
-/// through MonoResampler, which never asks AVAudioConverter to downmix (that yields digital zero).
+/// 16 kHz mono Float32 chunks in order on the stream start() returns. Core Audio mixes the tap down
+/// to mono, so a speaker panned to one side by spatial audio keeps full level; MonoResampler only
+/// converts the rate.
 /// A change of output device or rate rebuilds the aggregate device and the stream carries on.
 /// Without the system audio grant, macOS feeds the tap digital zero rather than failing.
 @MainActor
@@ -88,12 +89,12 @@ public final class SystemAudioTap {
         case .processes(let pids):
             tapped = pids.compactMap(AudioApps.processObject)
             guard !tapped.isEmpty else { throw TapError.noProcess }
-            description = CATapDescription(stereoMixdownOfProcesses: tapped)
+            description = CATapDescription(monoMixdownOfProcesses: tapped)
             // A helper that exits and comes back mid-call (a browser's audio service) rejoins the tap.
             description.isProcessRestoreEnabled = true
         case .global:
             tapped = []
-            description = CATapDescription(stereoGlobalTapButExcludeProcesses: AudioApps.processObject(pid: getpid()).map { [$0] } ?? [])
+            description = CATapDescription(monoGlobalTapButExcludeProcesses: AudioApps.processObject(pid: getpid()).map { [$0] } ?? [])
         }
         description.name = "Bark"
         description.isPrivate = true

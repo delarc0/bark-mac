@@ -197,6 +197,9 @@ struct CallAppsTests {
         ("com.apple.FaceTime", "FaceTime"),
         ("com.cisco.webexmeetingsapp", "Webex"),
         ("com.hnc.Discord.helper.Renderer", "Discord"),
+        ("net.whatsapp.WhatsApp", "WhatsApp"),
+        ("net.whatsapp.WhatsApp.ServiceExtension", "WhatsApp"),
+        ("ru.keepcoder.Telegram", "Telegram"),
         ("com.google.Chrome.helper.renderer", "Google Chrome"),
         ("com.apple.WebKit.GPU", "Safari"),
         ("company.thebrowser.Browser", "Arc"),
@@ -220,6 +223,8 @@ struct CallAppsTests {
         #expect(CallApps.app(bundleID: "com.google.Chrome")?.capturesAllTabs == true)
         #expect(CallApps.app(bundleID: "com.apple.Safari")?.capturesAllTabs == true)
         #expect(CallApps.app(bundleID: "us.zoom.xos")?.capturesAllTabs == false)
+        #expect(CallApps.app(bundleID: "net.whatsapp.WhatsApp")?.capturesAllTabs == false)
+        #expect(CallApps.app(bundleID: "ru.keepcoder.Telegram")?.capturesAllTabs == false)
     }
 
     @Test func aCallNeedsAudioInputFromACallAppOrBrowser() {

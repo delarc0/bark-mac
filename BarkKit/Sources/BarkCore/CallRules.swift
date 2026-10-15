@@ -187,6 +187,8 @@ public enum CallApps {
         CallApp(name: "FaceTime", bundleIDs: ["com.apple.FaceTime", "com.apple.avconferenced"]),
         CallApp(name: "Webex", bundleIDs: ["com.cisco.webexmeetingsapp", "Cisco-Systems.Spark"]),
         CallApp(name: "Discord", bundleIDs: ["com.hnc.Discord"]),
+        CallApp(name: "WhatsApp", bundleIDs: ["net.whatsapp.WhatsApp"]),
+        CallApp(name: "Telegram", bundleIDs: ["ru.keepcoder.Telegram"]),
         CallApp(name: "Google Chrome", bundleIDs: ["com.google.Chrome"], capturesAllTabs: true),
         // Safari's media plays in WebKit's GPU process, which every WebKit app shares.
         CallApp(name: "Safari", bundleIDs: ["com.apple.Safari", "com.apple.WebKit.GPU"], capturesAllTabs: true),
