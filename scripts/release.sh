@@ -4,9 +4,10 @@
 #
 # Usage:
 #   ./scripts/release.sh --check                 preflight only (is this machine release-ready?)
-#   ./scripts/release.sh 0.2.0                   build + notarize + stage locally, push NOTHING
-#   ./scripts/release.sh 0.2.0 --publish         the real thing: commit, tag, GH Release, appcast
-#   ./scripts/release.sh 0.2.0 --publish --notes "Fixed X"
+# Every non-check run (staged or --publish) must start on main, clean, with HEAD pushed to origin/main.
+#   ./scripts/release.sh 1.0.0                   build + notarize + stage locally, push NOTHING
+#   ./scripts/release.sh 1.0.0 --publish         the real thing: commit, tag, GH Release, appcast
+#   ./scripts/release.sh 1.0.0 --publish --notes "Fixed X"
 #
 # One-time machine setup (both interactive, Apple ID required):
 #   1. Xcode > Settings > Accounts > Manage Certificates > + > Developer ID Application
@@ -90,6 +91,14 @@ fi
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "usage: release.sh X.Y.Z [--publish] [--notes \"...\"]"
 preflight
+
+step "Release guard (main, clean, pushed)"
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+[ "$BRANCH" = "main" ] || fail "releases are cut from main only (on '${BRANCH}')"
+[ -z "$(git status --porcelain)" ] || fail "working tree is dirty - commit first, releases must be reproducible"
+git fetch origin main >/dev/null 2>&1 || fail "could not fetch origin/main"
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || fail "HEAD is not origin/main - push (or pull) first so the release is exactly what is on main"
+bold "on main at $(git rev-parse --short HEAD), matches origin/main"
 
 step "Version ${VERSION}"
 git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null && fail "tag v${VERSION} already exists"
@@ -198,7 +207,7 @@ cat > "$ITEM_FILE" <<EOF
             <title>Version ${VERSION}</title>
             <sparkle:version>${BUILD}</sparkle:version>
             <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
             <pubDate>${PUBDATE}</pubDate>
             <enclosure
                 url="${URL}"
