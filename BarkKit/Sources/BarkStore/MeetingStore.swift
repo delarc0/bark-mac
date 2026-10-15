@@ -77,13 +77,18 @@ public struct Gap: Sendable, Equatable {
     }
 }
 
-/// A meeting waiting for hq. The row stays until hq acknowledges it.
+/// A meeting queued for hq. The row stays until hq acknowledges it or rejects it for good.
 public struct OutboxItem: Sendable, Equatable {
-    public enum State: String, Sendable { case pending, acknowledged }
+    public enum State: String, Sendable { case pending, acknowledged, rejected }
     public let meetingID: UUID
     public let state: State
+    /// Bumped by every enqueue; a result reported for an older generation is ignored, so a meeting
+    /// queued again while its upload was in flight is sent again.
+    public let generation: Int64
     public let attempts: Int
+    /// The last failure, or for a rejected meeting hq's reason.
     public let lastError: String?
+    public let lastAttemptAt: Date?
 }
 
 /// Meetings on this Mac: `bark.sqlite` plus one folder per meeting holding its audio, under
@@ -144,6 +149,21 @@ public final class MeetingStore: Sendable {
             attempts INTEGER NOT NULL DEFAULT 0,
             last_error TEXT
         );
+        """,
+        // v2: outbox gains the rejected state, a generation per enqueue and the last attempt's time.
+        """
+        CREATE TABLE outbox_v2 (
+            meeting_id TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+            state TEXT NOT NULL CHECK (state IN ('pending', 'acknowledged', 'rejected')),
+            generation INTEGER NOT NULL DEFAULT 1,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            last_attempt_at REAL
+        );
+        INSERT INTO outbox_v2 (meeting_id, state, attempts, last_error)
+            SELECT meeting_id, state, attempts, last_error FROM outbox ORDER BY rowid;
+        DROP TABLE outbox;
+        ALTER TABLE outbox_v2 RENAME TO outbox;
         """,
     ]
 
@@ -306,30 +326,68 @@ public final class MeetingStore: Sendable {
 
     // MARK: Outbox (the durable push queue to hq)
 
-    /// Queues the meeting; a meeting already queued or acknowledged is queued afresh.
+    /// Queues the meeting as a new generation; a meeting already queued, acknowledged or rejected is
+    /// queued afresh.
     public func enqueue(_ meeting: UUID) throws {
         try db.run("""
             INSERT INTO outbox (meeting_id, state) VALUES (?, 'pending')
-            ON CONFLICT (meeting_id) DO UPDATE SET state = 'pending', attempts = 0, last_error = NULL
+            ON CONFLICT (meeting_id) DO UPDATE SET state = 'pending', generation = generation + 1, attempts = 0,
+                last_error = NULL, last_attempt_at = NULL
             """, [meeting.uuidString])
+    }
+
+    private func outbox(where condition: String, _ arguments: [SQLBindable?]) throws -> [OutboxItem] {
+        try db.query("""
+            SELECT meeting_id, state, generation, attempts, last_error, last_attempt_at
+            FROM outbox WHERE \(condition) ORDER BY rowid
+            """, arguments) { row in
+            guard let id = UUID(uuidString: row.text(0)), let state = OutboxItem.State(rawValue: row.text(1)) else {
+                throw StoreError("malformed outbox row \(row.text(0))")
+            }
+            return OutboxItem(meetingID: id, state: state, generation: row.int(2), attempts: Int(row.int(3)),
+                              lastError: row.optionalText(4), lastAttemptAt: row.optionalDouble(5).map(Date.init(timeIntervalSince1970:)))
+        }
     }
 
     /// Oldest first.
     public func pendingOutbox() throws -> [OutboxItem] {
-        try db.query("SELECT meeting_id, state, attempts, last_error FROM outbox WHERE state = 'pending' ORDER BY rowid", []) { row in
-            guard let id = UUID(uuidString: row.text(0)), let state = OutboxItem.State(rawValue: row.text(1)) else {
-                throw StoreError("malformed outbox row \(row.text(0))")
-            }
-            return OutboxItem(meetingID: id, state: state, attempts: Int(row.int(2)), lastError: row.optionalText(3))
-        }
+        try outbox(where: "state = 'pending'", [])
     }
 
-    public func outboxFailed(_ meeting: UUID, error: String) throws {
-        try db.run("UPDATE outbox SET attempts = attempts + 1, last_error = ? WHERE meeting_id = ?", [error, meeting.uuidString])
+    /// Meetings hq refused for good, oldest first.
+    public func rejectedOutbox() throws -> [OutboxItem] {
+        try outbox(where: "state = 'rejected'", [])
     }
 
-    public func outboxAcknowledged(_ meeting: UUID) throws {
-        try db.run("UPDATE outbox SET state = 'acknowledged', last_error = NULL WHERE meeting_id = ?", [meeting.uuidString])
+    public func outboxItem(_ meeting: UUID) throws -> OutboxItem? {
+        try outbox(where: "meeting_id = ?", [meeting.uuidString]).first
+    }
+
+    // Each result names the generation that was uploaded and is a no-op (false) once it has moved on.
+
+    @discardableResult
+    public func outboxFailed(_ meeting: UUID, generation: Int64, error: String, at date: Date = .now) throws -> Bool {
+        try db.run("""
+            UPDATE outbox SET attempts = attempts + 1, last_error = ?, last_attempt_at = ?
+            WHERE meeting_id = ? AND generation = ? AND state = 'pending'
+            """, [error, date.timeIntervalSince1970, meeting.uuidString, generation]) == 1
+    }
+
+    /// hq refused the meeting for good: it is not retried until it is queued again.
+    @discardableResult
+    public func outboxRejected(_ meeting: UUID, generation: Int64, message: String, at date: Date = .now) throws -> Bool {
+        try db.run("""
+            UPDATE outbox SET state = 'rejected', attempts = attempts + 1, last_error = ?, last_attempt_at = ?
+            WHERE meeting_id = ? AND generation = ? AND state = 'pending'
+            """, [message, date.timeIntervalSince1970, meeting.uuidString, generation]) == 1
+    }
+
+    @discardableResult
+    public func outboxAcknowledged(_ meeting: UUID, generation: Int64) throws -> Bool {
+        try db.run("""
+            UPDATE outbox SET state = 'acknowledged', last_error = NULL
+            WHERE meeting_id = ? AND generation = ? AND state = 'pending'
+            """, [meeting.uuidString, generation]) == 1
     }
 
     // MARK: Audio
