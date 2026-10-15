@@ -12,12 +12,14 @@ import MLX
 // --language auto (pipeline only) routes each clip through detection; --model auto|auto8 loads
 // large-v3 plus KB at fp16 or 8-bit. Models come from ModelStore (BarkKit/scripts/dev-models.sh).
 // --meeting runs the S7 meeting budget (MeetingBudget.swift).
+// --cache-limit-mb <n> caps MLX's buffer cache at n MB in any mode (0 = MLX default, unlimited).
 
 let usage = """
     usage: mlx-eval --model swedish|swedish8|general|general8 --language <code> --clips <dir> --out <file.jsonl>
            mlx-eval --pipeline [--realtime 1] --model <as above> --language <code> ...
            mlx-eval --pipeline [--realtime 1] --model auto|auto8 --language auto ...
            mlx-eval --meeting [--speed 10] [--minutes 90] [--sample 60] --out <file.jsonl>
+           any mode takes --cache-limit-mb <n> (0 = MLX default)
     """
 
 func fail(_ message: String) -> Never {
@@ -35,6 +37,15 @@ while let flag = argv.popFirst() {
     }
     guard let value = argv.popFirst() else { fail(usage) }
     args[String(flag.dropFirst(2))] = value
+}
+
+// 0 leaves MLX's default alone: MLX's own cacheLimit 0 disables the cache, which is not the same.
+if let value = args["cache-limit-mb"] {
+    guard let mb = Int(value), mb >= 0 else { fail("--cache-limit-mb needs a non-negative integer\n\(usage)") }
+    if mb > 0 {
+        Memory.cacheLimit = mb << 20
+        FileHandle.standardError.write(Data("[mlx-eval] MLX cache limit \(mb) MB\n".utf8))
+    }
 }
 
 // Where FluidAudio cached Silero for the spike tools; the app ships its own copy.
