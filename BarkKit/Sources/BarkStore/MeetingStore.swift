@@ -327,14 +327,26 @@ public final class MeetingStore: Sendable {
 
     /// Replaces the meeting's speakers with `labels` (names unset) and points each segment in
     /// `assignments` (segment id to an index in `labels`) at its speaker; other segments get none.
-    /// Marks diarization done and queues the meeting for hq again, in one transaction.
-    public func saveSpeakers(_ meeting: UUID, labels: [String], assignments: [Int64: Int]) throws {
+    /// Each segment in `replacing` is swapped for its pieces, each with its own speaker. Marks
+    /// diarization done and queues the meeting for hq again, in one transaction.
+    public func saveSpeakers(_ meeting: UUID, labels: [String], assignments: [Int64: Int],
+                             replacing: [Int64: [(segment: Segment, speaker: Int?)]] = [:]) throws {
         try db.transaction {
             try db.run("UPDATE segments SET speaker_id = NULL WHERE meeting_id = ?", [meeting.uuidString])
             try db.run("DELETE FROM speakers WHERE meeting_id = ?", [meeting.uuidString])
             let ids = try labels.map { try addSpeaker($0, to: meeting) }
             for (segment, index) in assignments {
                 try db.run("UPDATE segments SET speaker_id = ? WHERE id = ? AND meeting_id = ?", [ids[index], segment, meeting.uuidString])
+            }
+            for (original, pieces) in replacing {
+                guard try db.run("DELETE FROM segments WHERE id = ? AND meeting_id = ?", [original, meeting.uuidString]) == 1 else {
+                    throw StoreError("no segment \(original) in meeting \(meeting)")
+                }
+                for (piece, speaker) in pieces {
+                    var piece = piece
+                    piece.speakerID = speaker.map { ids[$0] }
+                    try addSegment(piece, to: meeting)
+                }
             }
             try setDiarization(meeting, .done)
             try enqueue(meeting)
@@ -441,6 +453,14 @@ public final class MeetingStore: Sendable {
     }
 
     // MARK: Audio
+
+    /// Up to `count` samples of a stream from sample `start`, from its archive or, before that,
+    /// its PCM.
+    public func readAudio(_ meeting: UUID, _ stream: MeetingStream, from start: Int, count: Int) throws -> [Float] {
+        let archived = archivedAudio(meeting, stream)
+        guard FileManager.default.fileExists(atPath: archived.path) else { return try PCM.read(rawAudio(meeting, stream), from: start, count: count) }
+        return try PCM.readArchive(archived, from: start, count: count)
+    }
 
     /// Compresses every stream's PCM to Apple Lossless and deletes the PCM once the CAF checks out.
     public func archiveAudio(_ meeting: UUID) throws {

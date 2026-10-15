@@ -8,9 +8,15 @@ import os
 public struct SpeakerReport: Sendable, Equatable {
     /// Speakers saved, Me included.
     public let speakers: Int
-    /// Segments with words that got a speaker, out of `segments`.
+    /// Segments with words that got a speaker, out of `segments` (after splitting).
     public let attributed: Int
     public let segments: Int
+    /// Segments cut where the speaker changes and re-decoded, and the pieces they became.
+    public let split: Int
+    public let pieces: Int
+    /// Segments that held a change but kept their text whole: a piece failed or came back empty,
+    /// or the pieces lost words.
+    public let keptWhole: Int
     /// Seconds of audio diarized, every stream counted.
     public let audioSeconds: Double
     /// Diarizing and saving, model loading included.
@@ -21,8 +27,11 @@ public struct SpeakerReport: Sendable, Equatable {
 /// offline pipeline). Each stream that can hold several people is diarized on its own; a call's
 /// mic is the user alone and is labelled Me without diarizing it. Every segment with words gets
 /// the speaker with the most overlap; speakers are labelled Speaker 1...n in order of first
-/// appearance, names left to the user. Models load per meeting and are released after it; run
-/// one meeting at a time.
+/// appearance, names left to the user. Given the Transcriber, a segment the turns show two
+/// people in is cut where the speaker changes (BarkCore SegmentSplit) and its pieces re-decoded
+/// with the segment's own model and language; when any piece fails or comes back empty, or the
+/// pieces hold fewer words than the segment did, the segment is kept whole. Models load per meeting and are released after it; run one meeting at
+/// a time.
 public final class MeetingDiarizer: Sendable {
     /// What `models` must hold: Fluid Inference's Core ML conversion of pyannote community-1
     /// (CC-BY-4.0).
@@ -50,10 +59,12 @@ public final class MeetingDiarizer: Sendable {
         stream == .me && mode == .call ? .user : .diarize
     }
 
-    /// Diarizes the done meeting `id`, saves its speakers (which queues it for hq again) and marks
-    /// diarization done; on an error it is marked failed and the transcript is untouched.
+    /// Diarizes the done meeting `id`, splits segments that hold two people when `transcriber` is
+    /// given, saves the speakers (which queues it for hq again) and marks diarization done; on an
+    /// error it is marked failed and the transcript is untouched.
     @discardableResult
-    public func run(_ id: UUID, store: MeetingStore) async throws -> SpeakerReport {
+    public func run(_ id: UUID, store: MeetingStore, transcriber: Transcriber? = nil,
+                    rule: SegmentSplit.Rule = SegmentSplit.Rule()) async throws -> SpeakerReport {
         let clock = ContinuousClock()
         let started = clock.now
         guard let meeting = try store.meeting(id), meeting.status == .done else { throw StoreError("meeting \(id) is not done") }
@@ -71,11 +82,40 @@ public final class MeetingDiarizer: Sendable {
                     audioSeconds += seconds
                 }
             }
-            let (labels, assignments) = Self.attribute(segments, mode: meeting.mode, turns: turns)
-            try store.saveSpeakers(id, labels: labels, assignments: assignments)
-            let report = SpeakerReport(speakers: labels.count, attributed: assignments.count, segments: segments.count,
+            var pieces: [Int64: [Segment]] = [:]
+            var keptWhole = 0
+            if let transcriber {
+                for segment in segments where Self.role(of: segment.stream, in: meeting.mode) == .diarize {
+                    let streamTurns = turns[segment.stream] ?? []
+                    let windows = SegmentSplit.cutWindows(start: segment.start, end: segment.end, turns: streamTurns, rule: rule)
+                    guard !windows.isEmpty, let id = segment.id else { continue }
+                    if let split = try await split(segment, of: meeting.id, windows: windows, turns: streamTurns, rule: rule,
+                                                   store: store, transcriber: transcriber) {
+                        pieces[id] = split
+                    } else {
+                        keptWhole += 1
+                    }
+                }
+            }
+            let final = segments.flatMap { segment in segment.id.flatMap { pieces[$0] } ?? [segment] }
+            let (labels, speakers) = Self.attribute(final, mode: meeting.mode, turns: turns)
+            var assignments: [Int64: Int] = [:]
+            var replacements: [Int64: [(segment: Segment, speaker: Int?)]] = [:]
+            var index = 0
+            for segment in segments {
+                if let id = segment.id, let split = pieces[id] {
+                    replacements[id] = split.enumerated().map { ($1, speakers[index + $0]) }
+                    index += split.count
+                } else {
+                    if let id = segment.id, let speaker = speakers[index] { assignments[id] = speaker }
+                    index += 1
+                }
+            }
+            try store.saveSpeakers(id, labels: labels, assignments: assignments, replacing: replacements)
+            let report = SpeakerReport(speakers: labels.count, attributed: speakers.compactMap { $0 }.count, segments: final.count,
+                                       split: pieces.count, pieces: pieces.values.reduce(0) { $0 + $1.count }, keptWhole: keptWhole,
                                        audioSeconds: audioSeconds, seconds: (clock.now - started).seconds)
-            log.info("Meeting \(id, privacy: .public): \(report.speakers) speakers, \(report.attributed)/\(report.segments) segments, \(report.audioSeconds, format: .fixed(precision: 0)) s audio in \(report.seconds, format: .fixed(precision: 1)) s")
+            log.info("Meeting \(id, privacy: .public): \(report.speakers) speakers, \(report.attributed)/\(report.segments) segments, \(report.split) split, \(report.keptWhole) kept whole, \(report.audioSeconds, format: .fixed(precision: 0)) s audio in \(report.seconds, format: .fixed(precision: 1)) s")
             return report
         } catch {
             try? store.setDiarization(id, .failed)
@@ -83,32 +123,53 @@ public final class MeetingDiarizer: Sendable {
         }
     }
 
-    /// Labels and the segment-to-label assignments for `segments` (those with words, in time
-    /// order), given each diarized stream's turns. Me first when the user spoke, then Speaker n.
+    /// Labels, and for each of `segments` (those with words, in time order) its label's index or
+    /// nil, given each diarized stream's turns. Me first when the user spoke, then Speaker n.
     static func attribute(_ segments: [Segment], mode: MeetingMode,
-                          turns: [MeetingStream: [SpeakerAttribution.Turn]]) -> (labels: [String], assignments: [Int64: Int]) {
+                          turns: [MeetingStream: [SpeakerAttribution.Turn]]) -> (labels: [String], speakers: [Int?]) {
         struct Key: Hashable {
             let stream: MeetingStream
             let speaker: Int
         }
-        var keys: [(segment: Int64, key: Key)] = []
-        var user: [Int64] = []
-        for segment in segments {
-            guard let id = segment.id else { continue }
-            if role(of: segment.stream, in: mode) == .user {
-                user.append(id)
-            } else if let speaker = SpeakerAttribution.speaker(start: segment.start, end: segment.end, in: turns[segment.stream] ?? []) {
-                keys.append((id, Key(stream: segment.stream, speaker: speaker)))
-            }
+        let keys: [Key?] = segments.map { segment in
+            guard role(of: segment.stream, in: mode) == .diarize else { return nil }
+            return SpeakerAttribution.speaker(start: segment.start, end: segment.end, in: turns[segment.stream] ?? [])
+                .map { Key(stream: segment.stream, speaker: $0) }
         }
-        let numbers = SpeakerAttribution.numbers(inOrderOfAppearance: keys.map(\.key))
-        var labels = user.isEmpty ? [] : [SpeakerAttribution.userLabel]
-        let offset = labels.count
-        labels += (0 ..< numbers.count).map { SpeakerAttribution.label($0 + 1) }
-        var assignments: [Int64: Int] = [:]
-        for id in user { assignments[id] = 0 }
-        for (segment, key) in keys { assignments[segment] = offset + numbers[key]! - 1 }
-        return (labels, assignments)
+        let user = segments.contains { role(of: $0.stream, in: mode) == .user }
+        let numbers = SpeakerAttribution.numbers(inOrderOfAppearance: keys.compactMap { $0 })
+        let offset = user ? 1 : 0
+        let labels = (user ? [SpeakerAttribution.userLabel] : []) + (0 ..< numbers.count).map { SpeakerAttribution.label($0 + 1) }
+        let speakers = zip(segments, keys).map { segment, key -> Int? in
+            role(of: segment.stream, in: mode) == .user ? 0 : key.map { offset + numbers[$0]! - 1 }
+        }
+        return (labels, speakers)
+    }
+
+    /// The segment's pieces, cut at the quietest point of each window and re-decoded with its own
+    /// model and language; nil when it cannot be split without losing text.
+    private func split(_ segment: Segment, of meeting: UUID, windows: [ClosedRange<Double>], turns: [SpeakerAttribution.Turn],
+                       rule: SegmentSplit.Rule, store: MeetingStore, transcriber: Transcriber) async throws -> [Segment]? {
+        guard let role = await transcriber.loadedRole(for: segment.model) else { return nil }
+        let rate = Double(PCM.sampleRate)
+        let first = Int((segment.start * rate).rounded())
+        let audio = try store.readAudio(meeting, segment.stream, from: first, count: Int((segment.end * rate).rounded()) - first)
+        let energy = SegmentSplit.energy(audio, rate: PCM.sampleRate)
+        let cuts = windows.map { SegmentSplit.quietest(in: $0, energy: energy, origin: segment.start, hop: 0.01) }
+        let ranges = SegmentSplit.pieces(start: segment.start, end: segment.end, cuts: cuts, rule: rule)
+        guard ranges.count > 1 else { return nil }
+        var pieces: [Segment] = []
+        for range in ranges {
+            let from = max(0, Int((range.lowerBound * rate).rounded()) - first)
+            let to = min(audio.count, Int((range.upperBound * rate).rounded()) - first)
+            let speech = turns.reduce(0.0) { $0 + max(0, min(range.upperBound, $1.end) - max(range.lowerBound, $1.start)) }
+            let (result, redecoded) = await transcriber.decodeSegment(Array(audio[from ..< to]), speechSeconds: speech, on: role,
+                                                                      language: segment.language, .background)
+            guard let text = result?.text else { return nil }
+            pieces.append(Segment(stream: segment.stream, start: range.lowerBound, end: range.upperBound, text: text,
+                                  model: segment.model, language: segment.language, redecoded: redecoded))
+        }
+        return SegmentSplit.keepsText(whole: segment.text, pieces: pieces.map(\.text), rule: rule) ? pieces : nil
     }
 
     /// One stream's speaker turns, from its archived audio or, when archiving failed, its PCM.

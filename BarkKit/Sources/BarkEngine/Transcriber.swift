@@ -12,9 +12,19 @@ public enum TranscriberError: Error {
 
 /// Runs MLX work one job at a time on one serial queue, because MLXArray is not thread safe. A job
 /// that outlives its timeout is abandoned, not cancelled (MLX cannot be interrupted): the caller
-/// gets `timedOut` at once, and the job holds the queue until it returns.
+/// gets `timedOut` at once, and the job holds the queue until it returns. Foreground jobs
+/// (dictation) run before any queued background job (meetings, the speaker pass); a job already
+/// running finishes first.
 final class MLXWorker: Sendable {
+    enum Priority: Sendable {
+        case foreground, background
+    }
+
     private let queue = DispatchQueue(label: "se.lab37.bark.mlx", qos: .userInitiated)
+    private let jobs = Mutex<(foreground: [@Sendable () -> Void], background: [@Sendable () -> Void])>(([], []))
+
+    /// Jobs waiting for the queue.
+    var queued: Int { jobs.withLock { $0.foreground.count + $0.background.count } }
 
     private final class Once<T: Sendable>: Sendable {
         let continuation: Mutex<CheckedContinuation<T, Error>?>
@@ -24,13 +34,60 @@ final class MLXWorker: Sendable {
         }
     }
 
-    func run<T: Sendable>(timeout seconds: TimeInterval? = nil, _ work: @escaping @Sendable () throws -> T) async throws -> T {
+    private func next() {
+        jobs.withLock { $0.foreground.isEmpty ? $0.background.removeFirst() : $0.foreground.removeFirst() }()
+    }
+
+    func run<T: Sendable>(_ priority: Priority = .foreground, timeout seconds: TimeInterval? = nil,
+                          _ work: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             let once = Once(continuation)
-            queue.async { once.resume(Result { try work() }) }
+            let job: @Sendable () -> Void = { once.resume(Result { try work() }) }
+            jobs.withLock { priority == .foreground ? $0.foreground.append(job) : $0.background.append(job) }
+            // One dispatch per job, each taking whichever job comes first when it gets the queue.
+            queue.async { self.next() }
             if let seconds {
                 DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { once.resume(.failure(TranscriberError.timedOut)) }
             }
+        }
+    }
+}
+
+/// Dictation goes first: background work waits here before each decode while any dictation is
+/// open, so it never starts a new decode in the middle of one.
+final class ForegroundGate: Sendable {
+    private struct State {
+        var open: Set<UUID> = []
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    var isClear: Bool { state.withLock { $0.open.isEmpty } }
+
+    func open(_ id: UUID) {
+        state.withLock { _ = $0.open.insert(id) }
+    }
+
+    /// Safe to call more than once.
+    func close(_ id: UUID) {
+        let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.open.remove(id)
+            guard state.open.isEmpty else { return [] }
+            defer { state.waiters = [] }
+            return state.waiters
+        }
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilClear() async {
+        await withCheckedContinuation { continuation in
+            let clear = state.withLock { state in
+                if state.open.isEmpty { return true }
+                state.waiters.append(continuation)
+                return false
+            }
+            if clear { continuation.resume() }
         }
     }
 }
@@ -45,6 +102,7 @@ public actor Transcriber {
     static let sampleRate = 16_000
 
     let worker = MLXWorker()
+    let gate = ForegroundGate()
     private let generalFolder: URL
     private let swedishFolder: URL?
     private let vadFolder: URL
@@ -95,7 +153,7 @@ public actor Transcriber {
 
     private func loadSwedish(_ folder: URL) async {
         do {
-            let engine = try await worker.run { try Engine(folder: folder) }
+            let engine = try await worker.run(.background) { try Engine(folder: folder) }
             try await warmUp(engine, language: "sv")
             engines[.swedish] = engine
         } catch {
@@ -117,8 +175,9 @@ public actor Transcriber {
         }
     }
 
+    /// Opens a dictation: background decodes wait until it is finished or cancelled.
     public func makeSession(language: LanguageChoice, cleanup: Bool = true, vocabulary: [String: String] = [:]) throws -> DictationSession {
-        DictationSession(transcriber: self, vad: try startedVAD(), choice: language, cleanup: cleanup, vocabulary: vocabulary)
+        DictationSession(transcriber: self, gate: gate, vad: try startedVAD(), choice: language, cleanup: cleanup, vocabulary: vocabulary)
     }
 
     /// Silero for a session's segmenters, once start() has run.
@@ -138,6 +197,11 @@ public actor Transcriber {
         _ = try engine.vocabulary.language(code)
     }
 
+    /// The loaded model whose id is `model`, if any.
+    func loadedRole(for model: String) -> ModelRole? {
+        [ModelRole.swedish, .general].first { engines[$0] != nil && modelID($0) == model }
+    }
+
     /// The model's id, its folder's name (kb-whisper-large-8bit).
     func modelID(_ role: ModelRole) -> String {
         (role == .swedish ? swedishFolder ?? generalFolder : generalFolder).lastPathComponent
@@ -147,25 +211,32 @@ public actor Transcriber {
         remembered = language
     }
 
-    func transcribe(_ samples: [Float], on role: ModelRole, language: String) async throws -> Transcription {
+    /// A background decode first waits for open dictations to end, then queues behind any
+    /// dictation decode.
+    func transcribe(_ samples: [Float], on role: ModelRole, language: String, _ priority: MLXWorker.Priority = .foreground) async throws
+        -> Transcription {
+        if priority == .background { await gate.waitUntilClear() }
         guard let engine = engines[role] ?? engines[.general] else { throw TranscriberError.notStarted }
-        return try await worker.run(timeout: Self.decodeTimeout) { try engine.transcribe(samples, language: language) }
+        return try await worker.run(priority, timeout: Self.decodeTimeout) { try engine.transcribe(samples, language: language) }
     }
 
     /// The timestamped re-decode with a seek loop, for a decode that stopped short.
-    func transcribeTimestamped(_ samples: [Float], on role: ModelRole, language: String) async throws -> Transcription {
+    func transcribeTimestamped(_ samples: [Float], on role: ModelRole, language: String, _ priority: MLXWorker.Priority = .foreground)
+        async throws -> Transcription {
+        if priority == .background { await gate.waitUntilClear() }
         guard let engine = engines[role] ?? engines[.general] else { throw TranscriberError.notStarted }
-        return try await worker.run(timeout: Self.decodeTimeout) { try engine.transcribeTimestamped(samples, language: language) }
+        return try await worker.run(priority, timeout: Self.decodeTimeout) { try engine.transcribeTimestamped(samples, language: language) }
     }
 
     /// The decode policy for one segment: the plain decode, then the timestamped re-decode when it
     /// stopped short (BarkCore Truncation). A cancelled calling task skips the re-decode. A nil
-    /// result means the decode timed out or threw.
-    func decodeSegment(_ audio: [Float], speechSeconds: Double, on role: ModelRole, language: String) async
-        -> (result: Transcription?, redecoded: Bool) {
-        guard let plain = try? await transcribe(audio, on: role, language: language) else { return (nil, false) }
+    /// result means the decode timed out or threw. Meetings and the speaker pass decode in the
+    /// background, behind dictation.
+    func decodeSegment(_ audio: [Float], speechSeconds: Double, on role: ModelRole, language: String,
+                       _ priority: MLXWorker.Priority = .foreground) async -> (result: Transcription?, redecoded: Bool) {
+        guard let plain = try? await transcribe(audio, on: role, language: language, priority) else { return (nil, false) }
         guard !Task.isCancelled, Truncation.isTruncated(speechSeconds: speechSeconds, tokens: plain.tokens, language: language),
-              let full = try? await transcribeTimestamped(audio, on: role, language: language) else { return (plain, false) }
+              let full = try? await transcribeTimestamped(audio, on: role, language: language, priority) else { return (plain, false) }
         return (full, true)
     }
 

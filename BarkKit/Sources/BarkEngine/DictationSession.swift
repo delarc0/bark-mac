@@ -34,6 +34,8 @@ public actor DictationSession {
     static let sampleRate = Segmenter.sampleRate
 
     private let transcriber: Transcriber
+    private let gate: ForegroundGate
+    private let id = UUID()
     private let vad: VadManager
     private let choice: LanguageChoice
     private let cleanup: Bool
@@ -50,13 +52,20 @@ public actor DictationSession {
     private var cancelled = false
     private var pump: Task<Void, Never>?
 
-    init(transcriber: Transcriber, vad: VadManager, choice: LanguageChoice, cleanup: Bool, vocabulary: [String: String]) {
+    init(transcriber: Transcriber, gate: ForegroundGate, vad: VadManager, choice: LanguageChoice, cleanup: Bool,
+         vocabulary: [String: String]) {
         self.transcriber = transcriber
+        self.gate = gate
+        gate.open(id)
         self.vad = vad
         self.choice = choice
         self.cleanup = cleanup
         self.vocabulary = vocabulary
         (wake, wakeUp) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
+    }
+
+    deinit {
+        gate.close(id)
     }
 
     public func feed(_ chunk: [Float]) {
@@ -73,6 +82,7 @@ public actor DictationSession {
         guard !cancelled else { return }
         cancelled = true
         released = true
+        gate.close(id)
         segmenter.dropPending()
         // Lets a decode in flight skip its re-decode.
         pump?.cancel()
@@ -89,6 +99,7 @@ public actor DictationSession {
         startPump()
         wakeUp.yield()
         await pump?.value
+        gate.close(id)
         let text = TextCleanup.process(segments.map(\.text), cleanup: cleanup, vocabulary: vocabulary)
         let decoded = segments.isEmpty ? nil : route
         return DictationResult(text: text, releaseToFinal: (clock.now - release).seconds, segments: segments,

@@ -1,6 +1,7 @@
 import AVFoundation
 import BarkCore
 import BarkEngine
+import BarkStore
 import Foundation
 import MLX
 
@@ -14,13 +15,21 @@ import MLX
 // --meeting runs the S7 meeting budget (MeetingBudget.swift).
 // --diarize runs every .wav through MeetingDiarizer with the app's bundled models, one RTTM per
 // clip (S5; score with pyannote.metrics against reference RTTMs).
+// --split-eval runs one recording through a meeting and the speaker pass with and without
+// splitting segments at speaker changes (SplitEval.swift).
+// --background-split <store> (pipeline, explicit language) loads large-v3 8-bit as general and KB
+// 8-bit as Swedish and runs the splitting speaker pass on copies of that transcribed meeting
+// store in a loop for the whole run, so dictation latency is measured against it; --gap waits
+// that many seconds between dictations, as a person would.
 
 let usage = """
     usage: mlx-eval --model swedish|swedish8|general|general8 --language <code> --clips <dir> --out <file.jsonl>
            mlx-eval --pipeline [--realtime 1] --model <as above> --language <code> ...
+           mlx-eval --pipeline --realtime 1 --model general8 --language sv [--background-split <store>] [--gap 2] ...
            mlx-eval --pipeline [--realtime 1] --model auto|auto8 --language auto ...
            mlx-eval --meeting [--speed 10] [--minutes 90] [--sample 60] --out <file.jsonl>
            mlx-eval --diarize --clips <dir> --rttm <dir> --out <file.jsonl>
+           mlx-eval --split-eval --wav <file> --mode call|in_person --work <dir> --min-turn 1,1.5 --out <prefix>
     """
 
 func fail(_ message: String) -> Never {
@@ -32,7 +41,7 @@ var args: [String: String] = [:]
 var argv = CommandLine.arguments.dropFirst()
 while let flag = argv.popFirst() {
     guard flag.hasPrefix("--") else { fail(usage) }
-    if flag == "--pipeline" || flag == "--meeting" || flag == "--diarize" {
+    if flag == "--pipeline" || flag == "--meeting" || flag == "--diarize" || flag == "--split-eval" {
         args[String(flag.dropFirst(2))] = "1"
         continue
     }
@@ -55,11 +64,25 @@ if args["meeting"] == "1" {
     try out.close()
     exit(0)
 }
+let diarizationModels = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../App/Resources/speaker-diarization")
+if args["split-eval"] == "1" {
+    guard let wav = args["wav"], let mode = args["mode"].flatMap(MeetingMode.init(rawValue:)), let work = args["work"],
+          let out = args["out"] else { fail(usage) }
+    let minTurns = (args["min-turn"] ?? "1").split(separator: ",").compactMap { Double($0) }
+    let models = ModelStore()
+    guard models.isInstalled(ModelID.general8), MeetingDiarizer.modelsPresent(in: diarizationModels) else { fail("models missing") }
+    let transcriber = Transcriber(general: models.folder(ModelID.general8), swedish: nil, vad: sileroFolder)
+    try await transcriber.start()
+    try await SplitEval.run(wav: URL(fileURLWithPath: wav), mode: mode, work: URL(fileURLWithPath: work), minTurns: minTurns, out: out,
+                            transcriber: transcriber, diarizer: MeetingDiarizer(models: diarizationModels)) {
+        FileHandle.standardError.write(Data("[mlx-eval] \($0)\n".utf8))
+    }
+    exit(0)
+}
 if args["diarize"] == "1" {
     guard let clipsDir = args["clips"], let rttmDir = args["rttm"], let outPath = args["out"] else { fail(usage) }
-    let models = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../App/Resources/speaker-diarization")
-    guard MeetingDiarizer.modelsPresent(in: models) else { fail("no diarization models in \(models.path)") }
-    let diarizer = MeetingDiarizer(models: models)
+    guard MeetingDiarizer.modelsPresent(in: diarizationModels) else { fail("no diarization models in \(diarizationModels.path)") }
+    let diarizer = MeetingDiarizer(models: diarizationModels)
     try FileManager.default.createDirectory(atPath: rttmDir, withIntermediateDirectories: true)
     FileManager.default.createFile(atPath: outPath, contents: nil)
     let out = try FileHandle(forWritingTo: URL(fileURLWithPath: outPath))
@@ -175,7 +198,10 @@ if !pipeline {
     // matrix (KB on English included) can be measured; auto loads both and routes for real.
     let transcriber: Transcriber
     let choice: LanguageChoice
-    if let (general, swedish) = autoPairs[model], language == "auto" {
+    if args["background-split"] != nil || args["gap"] != nil {
+        transcriber = Transcriber(general: store.folder(ModelID.general8), swedish: store.folder(ModelID.swedish8), vad: sileroFolder)
+        choice = .explicit(language)
+    } else if let (general, swedish) = autoPairs[model], language == "auto" {
         transcriber = Transcriber(general: store.folder(general), swedish: store.folder(swedish), vad: sileroFolder)
         choice = .auto
     } else {
@@ -205,6 +231,23 @@ if !pipeline {
 
     let warm = try await dictate(try load(clips[0]))
     log("first dictation \(String(format: "%.2f", warm.releaseToFinal))s")
+    let gap = Double(args["gap"] ?? "0") ?? 0
+    let background = args["background-split"].map { path in
+        Task.detached { () -> (passes: Int, pieces: Int) in
+            let source = URL(fileURLWithPath: path), diarizer = MeetingDiarizer(models: diarizationModels)
+            var passes = 0, pieces = 0
+            while !Task.isCancelled {
+                let copy = FileManager.default.temporaryDirectory.appending(path: "bark-background-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: copy) }
+                guard (try? FileManager.default.copyItem(at: source, to: copy)) != nil, let meetings = try? MeetingStore(root: copy),
+                      let id = (try? meetings.meetings())?.first?.id,
+                      let report = try? await diarizer.run(id, store: meetings, transcriber: transcriber) else { break }
+                passes += 1
+                pieces += report.pieces
+            }
+            return (passes, pieces)
+        }
+    }
 
     struct Row: Encodable {
         let id: String
@@ -226,6 +269,7 @@ if !pipeline {
     }
     for (index, clip) in clips.enumerated() {
         let samples = try load(clip)
+        if gap > 0 { try await Task.sleep(for: .seconds(gap)) }
         let result = try await dictate(samples)
         let row = Row(id: String(clip.dropLast(4)), hypothesis: result.text, parts: result.segments.map(\.text),
                       segment_decode_seconds: result.segments.map(\.decodeSeconds),
@@ -239,6 +283,11 @@ if !pipeline {
                       detected: result.detection?.language, detected_probability: result.detection?.probability)
         try out.write(contentsOf: encoder.encode(row) + Data("\n".utf8))
         log("\(index + 1)/\(clips.count) \(row.id) \(String(format: "%.2f", row.release_to_final))s \(result.segments.count) parts \(row.model ?? "-")/\(row.language ?? "-")")
+    }
+    if let background {
+        background.cancel()
+        let (passes, pieces) = await background.value
+        log("background speaker pass: \(passes) passes, \(pieces) pieces re-decoded")
     }
 }
 log("peak memory \(gigabytes(Memory.peakMemory))")

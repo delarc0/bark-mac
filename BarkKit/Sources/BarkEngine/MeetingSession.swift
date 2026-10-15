@@ -216,7 +216,7 @@ public actor MeetingSession {
             swedishSettled = true
         }
         let model = await transcriber.available(role)
-        let (result, redecoded) = await transcriber.decodeSegment(audio, speechSeconds: speech, on: model, language: language)
+        let (result, redecoded) = await transcriber.decodeSegment(audio, speechSeconds: speech, on: model, language: language, .background)
         let rate = Double(Segmenter.sampleRate)
         let start = Double(origin + range.lowerBound) / rate
         do {

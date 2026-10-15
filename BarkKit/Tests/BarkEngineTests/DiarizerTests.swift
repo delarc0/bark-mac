@@ -35,16 +35,17 @@ struct DiarizerTests {
         // The diarizer calls the second voice 0 and the first 1: labels follow the transcript.
         let turns: [MeetingStream: [Turn]] = [.them: [Turn(speaker: 1, start: 2, end: 5.2), Turn(speaker: 0, start: 5.2, end: 9),
                                                       Turn(speaker: 1, start: 10, end: 12)]]
-        let (labels, assignments) = MeetingDiarizer.attribute(segments, mode: .call, turns: turns)
+        let (labels, speakers) = MeetingDiarizer.attribute(segments, mode: .call, turns: turns)
         #expect(labels == ["Me", "Speaker 1", "Speaker 2"])
-        #expect(assignments == [1: 0, 2: 1, 3: 2, 4: 0, 5: 1])
+        #expect(speakers == [0, 1, 2, 0, 1, nil])
 
         let room = segments.map { segment($0.id!, .room, $0.start, $0.end) }
-        let (roomLabels, roomAssignments) = MeetingDiarizer.attribute(room, mode: .inPerson, turns: [.room: turns[.them]!])
+        let (roomLabels, roomSpeakers) = MeetingDiarizer.attribute(room, mode: .inPerson, turns: [.room: turns[.them]!])
         #expect(roomLabels == ["Speaker 1", "Speaker 2"])
-        #expect(roomAssignments == [2: 0, 3: 1, 5: 0])
+        #expect(roomSpeakers == [nil, 0, 1, nil, 0, nil])
 
-        #expect(MeetingDiarizer.attribute([], mode: .call, turns: [:]) == ([], [:]))
+        let empty = MeetingDiarizer.attribute([], mode: .call, turns: [:])
+        #expect(empty.labels.isEmpty && empty.speakers.isEmpty)
     }
 
     /// 90 s of a real meeting with two people and no crosstalk (AMI TS3003c from 885 s), as the
@@ -100,6 +101,68 @@ struct DiarizerTests {
             #expect(try store.meeting(id)?.diarization == .done)
         }
         #expect(try store.outboxItem(id)?.state == .pending && store.outboxItem(id)?.generation == generation + 2)
+    }
+
+    /// A room mic where two people take turns with 0.3 s between them (the two speakers of AMI
+    /// TS3003c from 885 s, cut and interleaved), transcribed as segments that each hold both: with
+    /// the Transcriber each is cut where the speaker changes and re-decoded, so the right person
+    /// gets nearly all the speech. A segment whose model is not loaded keeps its text whole.
+    @Test(.enabled(if: amiInstalled && Fixtures.modelsInstalled)) func segmentsHoldingTwoPeopleAreSplit() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "bark-split-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try Self.read(Self.ami.appending(path: "mix-headset/TS3003c.wav"), 885 ..< 975)
+        let a: [Range<Double>] = [0 ..< 4.1, 4.7 ..< 12, 12 ..< 20, 20 ..< 30.8]
+        let b: [Range<Double>] = [35.1 ..< 39.3, 64.6 ..< 68.2, 70.5 ..< 75.2, 76.6 ..< 85.1]
+        var audio: [Float] = []
+        var turns: [(speaker: String, start: Double, end: Double)] = []
+        for (speaker, range) in zip(a, b).flatMap({ [("A", $0), ("B", $1)] }) {
+            let start = Double(audio.count) / 16_000
+            audio += source[Int(range.lowerBound * 16_000) ..< Int(range.upperBound * 16_000)]
+            turns.append((speaker, start, Double(audio.count) / 16_000))
+            audio += [Float](repeating: 0, count: 4_800)
+        }
+        let transcriber = try await Fixtures.transcriber.value
+        let model = await transcriber.modelID(.general)
+
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "en", mode: .inPerson).id
+        let writer = try PCMWriter(url: store.rawAudio(id, .room))
+        try writer.append(audio)
+        try writer.close()
+        var foreign: Int64?
+        for pair in 0 ..< 4 {
+            let last = pair == 3
+            let segment = try store.addSegment(Segment(stream: .room, start: turns[2 * pair].start, end: turns[2 * pair + 1].end,
+                                                       text: "two people", model: last ? "another-model" : model, language: "en"), to: id)
+            if last { foreign = segment }
+        }
+        let before = try store.segments(id)
+        try store.finish(id, endedAt: .now)
+        try store.archiveAudio(id)
+
+        let report = try await MeetingDiarizer(models: Self.models).run(id, store: store, transcriber: transcriber)
+        #expect(report.split >= 2 && report.keptWhole == 1, "\(report)")
+        let segments = try store.segments(id)
+        #expect(segments.allSatisfy { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty })
+        #expect(segments.first { $0.id == foreign }?.text == "two people")
+        // Nothing lost: the pieces cover exactly what the originals covered.
+        func covered(_ segments: [Segment]) -> Double { segments.reduce(0) { $0 + $1.end - $1.start } }
+        #expect(abs(covered(segments) - covered(before)) < 1e-6)
+
+        let labels = Dictionary(uniqueKeysWithValues: try store.speakers(id).map { ($0.id, $0.label) })
+        var votes: [String: [String: Double]] = [:]
+        for segment in segments where segment.id != foreign {
+            guard let label = segment.speakerID.flatMap({ labels[$0] }) else { continue }
+            for turn in turns {
+                let shared = min(segment.end, turn.end) - max(segment.start, turn.start)
+                if shared > 0 { votes[turn.speaker, default: [:]][label, default: 0] += shared }
+            }
+        }
+        let mapping = votes.mapValues { $0.max { $0.value < $1.value }!.key }
+        #expect(Set(mapping.values).count == 2)
+        let right = votes.reduce(0.0) { $0 + ($1.value[mapping[$1.key]!] ?? 0) }
+        let total = votes.values.reduce(0.0) { $0 + $1.values.reduce(0, +) }
+        #expect(right / total > 0.8, "\(right) of \(total) s attributed to the right speaker")
     }
 
     @Test(.enabled(if: MeetingDiarizer.modelsPresent(in: models))) func missingAudioFailsAndLeavesTheTranscript() async throws {
