@@ -1040,3 +1040,53 @@ Landmines:
 - fsync, not F_FULLFSYNC, for the PCM (SQLite's default on macOS too): a
   power cut can still lose what the drive cache holds.
 - Archiving runs on the session after done: 2.2 s for a 90-minute meeting.
+
+## P2c result (2026-10-15): meetings in the app
+
+App code on the P2a/P2b/BarkHQ libraries, no library change. Pure rules in
+BarkCore `MeetingRules` (meeting language default, capture plan, call offers,
+audio retention, transcript text), 17 tests; 135 Swift tests pass. Built and
+unit-tested only: nothing here has run with real audio.
+
+Built:
+- Menu: Start Meeting with no dialog. Language = last meeting's (first time the
+  dictation language, Auto = sv with the Swedish model on, else en). Mode =
+  the detected call app's processes, a browser tapped whole (the subtitle says
+  so), otherwise mic only. Next Meeting submenu: language, and Automatic / Call
+  (all system audio when no call app is detected) / In Person for the next
+  meeting only. A ring icon while a meeting records; dictation shows over it.
+- Detect and offer: AudioApps every 5 s while idle; "Record this call?" in a
+  non-activating panel under the status item; offered once per set of input
+  pids, withdrawn when the call ends; a call recorded from the menu is not
+  offered afterwards.
+- Recording: call = me + them, in person = room. Gap, tapSilent (one notice
+  with System Settings) and a dead mic (one notice) handled; idle sleep held
+  off; sleep stops capture and marks a gap, wake rebuilds capture into the same
+  meeting (mic only with a silent them stream if the call app is gone); quit
+  finishes the meeting, capped at 15 s, recovery covers the rest.
+- Notes panel (floating, autosaved 1 s after typing), Meetings window (list,
+  live transcript with Me/Them and timestamps, notes apart, copy, rename,
+  delete, rejected hq upload with its message and Try Again).
+- Launch: unfinished meetings recovered in the background with a provisional
+  (quiet) notification, leftover audio archived, retention applied at launch
+  and daily, hq drained and deletions synced. A rename of a finished meeting
+  re-queues it for hq.
+- Settings: Meetings tab (keep audio 7/30/90 days or forever, echo
+  cancellation, hq status, Connect to hq / Disconnect, the hq address under
+  Advanced) and, on the Model tab, removal of Bark 0.2's two CoreML folders
+  with their size and a confirm.
+
+Needs Erik's desk test:
+- A real Zoom/Teams/Meet call: offer appears, Record works from the panel
+  without focusing Bark, both streams transcribe, browser subtitle reads right.
+- First call: the system audio prompt, and the "No call audio" notice opening
+  the right pane (Privacy_ScreenCapture is used; unverified it lands on the
+  system-audio list).
+- Dictation during a meeting (two mic engines, one with voice processing).
+- Lid close and wake mid-meeting: gap row, recording continues.
+- Quit mid-meeting, relaunch: the meeting finishes, the quiet notification.
+- hq pairing end to end once hq serves `/bark/connect` (the address must be
+  typed under Advanced: the base URL stays empty by default per the PRD).
+- The Model tab reads ~/Documents only when opened; a Debug build may get the
+  Files and Folders prompt there.
+- Copy for approval: every new user-visible string is in the P2c report.
