@@ -1092,3 +1092,53 @@ Needs Erik's desk test:
 - The Model tab reads ~/Documents only when opened; a Debug build may get the
   Files and Folders prompt there.
 - Copy for approval: every new user-visible string is in the P2c report.
+
+## Memory cap (2026-10-16)
+
+P2a's landmine 1: MLX's buffer cache grows a meeting process to ~6.8 GB peak while
+MLX active memory stays ~4.2 GB. mlx-swift's `Memory.cacheLimit` (bytes; the MLX
+default is the memory limit, effectively unlimited; 0 disables the cache, not the
+same) caps it. `mlx-eval --cache-limit-mb <n>` sets it at process start. Measured
+on the M5 Pro on its 140 W charger, nothing else on the GPU, one run per limit,
+unlimited first and last so drift shows. Meeting: `--meeting --speed 10 --minutes
+30` (both 8-bit models). Dictation: `--pipeline --realtime 1 --model swedish8
+--language sv` on dict-sv, release-to-final p50/p95 as score.py computes them.
+Data: `~/Library/Application Support/Bark/eval/memcap/`.
+
+Meeting, 30 audio minutes at 10x:
+
+| cache limit | peak footprint | MLX peak active | max cache seen | CPU s / audio min | finish to done | max backlog |
+|-------------|----------------|-----------------|----------------|-------------------|----------------|-------------|
+| unlimited (first) | 6.49 GB | 4.20 GB | 2.69 GB | 3.1 | 1.27 s | 23.4 s |
+| 2048 MB | 6.05 GB | 4.20 GB | 2.15 GB | 2.8 | 1.26 s | 18.0 s |
+| 1024 MB | 5.05 GB | 4.19 GB | 1.08 GB | 2.4 | 1.20 s | 33.5 s |
+| 512 MB | 4.91 GB | 4.18 GB | 0.54 GB | 3.1 | 1.60 s | 18.0 s |
+| 256 MB | 4.87 GB | 4.18 GB | 0.27 GB | 2.5 | 1.39 s | 19.0 s |
+| unlimited (last) | 6.50 GB | 4.20 GB | 2.70 GB | 2.2 | 1.19 s | 18.0 s |
+
+Dictation, dict-sv release to final:
+
+| cache limit | p50 | p95 |
+|-------------|-----|-----|
+| unlimited (first) | 0.53 s | 0.86 s |
+| 2048 MB | 0.57 s | 1.20 s |
+| 1024 MB | 0.53 s | 0.85 s |
+| 512 MB | 0.62 s | 0.81 s |
+| 256 MB | 0.49 s | 0.63 s |
+| unlimited (last) | 0.50 s | 0.63 s |
+
+- The cache tracks each cap exactly (2048 MiB reads as 2.15 GB) and the backlog
+  drains to 1.2 s of audio at stop in every run; thermal nominal throughout.
+- Baseline drift: p50 0.53 to 0.50 s, p95 0.86 to 0.63 s (later runs faster). The
+  2048 MB p95 (1.20 s) and 512 MB p50 (0.62 s) sit inside that noise and are not
+  monotonic in the cap; 256 MB matches the last baseline exactly (0.63 s p95).
+- An identical matrix run earlier that evening while another MLX eval shared the
+  GPU showed +56%/+61% baseline drift, thermal critical and dictation outliers to
+  9.8 s, and was discarded; the first/last baseline pair is what caught it.
+
+**Choice: 256 MB.** Dictation p50/p95 stay at or under both unlimited baselines,
+the meeting backlog stays bounded (max 19.0 s of audio, finish to done 1.39 s),
+and peak footprint drops from ~6.5 to ~4.9 GB. Set as `Transcriber.mlxCacheLimit`
+(256 * 1024 * 1024), applied once in `Transcriber.start()`. Note for mlx-eval:
+pipeline and --meeting runs re-pin this value in start(), so --cache-limit-mb now
+governs engine-only runs only.

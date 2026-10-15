@@ -12,14 +12,16 @@ import MLX
 // --language auto (pipeline only) routes each clip through detection; --model auto|auto8 loads
 // large-v3 plus KB at fp16 or 8-bit. Models come from ModelStore (BarkKit/scripts/dev-models.sh).
 // --meeting runs the S7 meeting budget (MeetingBudget.swift).
-// --cache-limit-mb <n> caps MLX's buffer cache at n MB in any mode (0 = MLX default, unlimited).
+// --cache-limit-mb <n> caps MLX's buffer cache at n MB (0 = MLX default, unlimited). Transcriber
+// modes (--pipeline, --meeting) re-pin it to Transcriber.mlxCacheLimit in start(); the flag only
+// holds for engine-only runs.
 
 let usage = """
     usage: mlx-eval --model swedish|swedish8|general|general8 --language <code> --clips <dir> --out <file.jsonl>
            mlx-eval --pipeline [--realtime 1] --model <as above> --language <code> ...
            mlx-eval --pipeline [--realtime 1] --model auto|auto8 --language auto ...
            mlx-eval --meeting [--speed 10] [--minutes 90] [--sample 60] --out <file.jsonl>
-           any mode takes --cache-limit-mb <n> (0 = MLX default)
+           --cache-limit-mb <n> caps MLX's buffer cache (0 = MLX default); Transcriber modes re-pin it in start()
     """
 
 func fail(_ message: String) -> Never {
