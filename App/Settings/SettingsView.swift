@@ -1,32 +1,53 @@
 import AppKit
 import BarkCapture
 import BarkCore
+import Observation
 import SwiftUI
+
+enum SettingsTab: Hashable {
+    case general, hotkey, audio, model, text, meetings
+}
+
+@MainActor
+@Observable
+final class SettingsSelection {
+    var tab = SettingsTab.general
+}
 
 struct SettingsView: View {
     @Bindable var settings: AppSettings
+    @Bindable var selection: SettingsSelection
+    let hq: HQLink
 
     var body: some View {
-        TabView {
+        TabView(selection: $selection.tab) {
             GeneralTab(settings: settings)
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
             HotkeyTab(settings: settings)
                 .tabItem { Label("Hotkey", systemImage: "keyboard") }
+                .tag(SettingsTab.hotkey)
             AudioTab(settings: settings)
                 .tabItem { Label("Audio", systemImage: "mic") }
+                .tag(SettingsTab.audio)
             ModelTab(settings: settings)
                 .tabItem { Label("Model", systemImage: "cpu") }
+                .tag(SettingsTab.model)
             TextTab(settings: settings)
                 .tabItem { Label("Text", systemImage: "text.alignleft") }
+                .tag(SettingsTab.text)
+            MeetingsTab(settings: settings, hq: hq)
+                .tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
+                .tag(SettingsTab.meetings)
         }
-        .frame(width: 520, height: 340)
+        .frame(width: 560, height: 400)
         .padding(20)
         .tint(BarkPalette.lime)
     }
 }
 
 /// A right-aligned label and its control, the layout every tab uses.
-private struct Row<Content: View>: View {
+struct Row<Content: View>: View {
     let label: String
     var width: CGFloat = 120
     @ViewBuilder let content: Content
@@ -40,7 +61,7 @@ private struct Row<Content: View>: View {
     }
 }
 
-private struct Note: View {
+struct Note: View {
     let text: String
     var indent: CGFloat = 128
     var size: CGFloat = 11
@@ -155,12 +176,6 @@ private struct AudioTab: View {
 private struct ModelTab: View {
     @Bindable var settings: AppSettings
 
-    static let languages: [(code: String, label: String)] = [
-        ("en", "English"), ("sv", "Swedish"), ("de", "German"), ("fr", "French"), ("es", "Spanish"),
-        ("it", "Italian"), ("no", "Norwegian"), ("da", "Danish"), ("nl", "Dutch"), ("pt", "Portuguese"),
-        ("ja", "Japanese"),
-    ]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
@@ -176,7 +191,7 @@ private struct ModelTab: View {
                 Picker("", selection: language) {
                     Text("Auto").tag(String?.none)
                     Divider()
-                    ForEach(Self.languages, id: \.code) { Text($0.label).tag(String?.some($0.code)) }
+                    ForEach(Languages.common, id: \.code) { Text($0.label).tag(String?.some($0.code)) }
                 }
                 .labelsHidden()
                 .frame(maxWidth: 200)
@@ -187,6 +202,7 @@ private struct ModelTab: View {
                 Toggle("Use kb-whisper-large for Swedish (~\(Models.size(of: Models.swedish)))", isOn: $settings.swedishModelEnabled).toggleStyle(.switch)
             }
             Note(text: "KB-Whisper roughly halves the error rate on Swedish (4.6% vs 8.4% measured on FLEURS). It loads in the background after launch; until it is ready, Swedish runs on whisper-large-v3. Takes effect on next launch.")
+            LegacyModelsRow()
             Spacer()
         }
         .padding(.top, 4)

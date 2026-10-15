@@ -42,6 +42,10 @@ targets:
         product: BarkEngine
       - package: BarkKit
         product: BarkCapture
+      - package: BarkKit
+        product: BarkStore
+      - package: BarkKit
+        product: BarkHQ
       - package: Sparkle
     postBuildScripts:
       - name: Deep re-sign (unify Team IDs; stabilize TCC grants across rebuilds)
