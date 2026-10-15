@@ -164,7 +164,7 @@ public final class MeetingDiarizer: Sendable {
             let to = min(audio.count, Int((range.upperBound * rate).rounded()) - first)
             let speech = turns.reduce(0.0) { $0 + max(0, min(range.upperBound, $1.end) - max(range.lowerBound, $1.start)) }
             let (result, redecoded) = await transcriber.decodeSegment(Array(audio[from ..< to]), speechSeconds: speech, on: role,
-                                                                      language: segment.language)
+                                                                      language: segment.language, .background)
             guard let text = result?.text else { return nil }
             pieces.append(Segment(stream: segment.stream, start: range.lowerBound, end: range.upperBound, text: text,
                                   model: segment.model, language: segment.language, redecoded: redecoded))

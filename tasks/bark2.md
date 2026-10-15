@@ -1288,3 +1288,30 @@ share the MLX queue with dictation, one piece (at most 28 s of audio) at a
 time, so a dictation released during the pass can wait up to one piece's
 decode; not measured. When no voice model is loaded the pass runs without
 splitting. Swedish is unmeasured, as for S5.
+
+Dictation goes first (2026-10-16): the re-decodes, live meeting decoding and
+recovery all run on the MLX queue dictation uses, so they now yield to it.
+The queue has two priorities: a dictation's decodes run before any queued
+background decode, and a decode already running finishes (MLX cannot be
+interrupted). Background decodes also wait at a gate while any
+DictationSession is open (created at press, closed on finish, cancel or
+release of the session), so they never start a new piece mid-dictation. Live
+meeting decoding pauses during a dictation too; its backlog drains at about
+16x real time afterwards (P2a). The Swedish model's background load runs at
+background priority.
+
+Measured with `mlx-eval --pipeline --realtime 1 --language sv --gap 2` on
+dict-sv (60 clips, KB 8-bit, 2 s between dictations as a person would), idle
+and with `--background-split` running the splitting speaker pass on the
+transcribed AMI ES2004a store in a loop (6 passes, 282 pieces re-decoded
+during the run):
+
+| release to final | idle | speaker pass running |
+|---|---|---|
+| p50 | 0.54 s | 0.55 s |
+| p95 | 0.91 s | 1.01 s |
+| max | 1.11 s | 1.54 s |
+
+Both stay inside the D3 target (p50 under 1.0 s, p95 under 1.5 s). What is
+left is a piece already decoding when a dictation is released, and the
+diarizer's own Core ML work, which is not on the MLX queue.

@@ -17,10 +17,15 @@ import MLX
 // clip (S5; score with pyannote.metrics against reference RTTMs).
 // --split-eval runs one recording through a meeting and the speaker pass with and without
 // splitting segments at speaker changes (SplitEval.swift).
+// --background-split <store> (pipeline, explicit language) loads large-v3 8-bit as general and KB
+// 8-bit as Swedish and runs the splitting speaker pass on copies of that transcribed meeting
+// store in a loop for the whole run, so dictation latency is measured against it; --gap waits
+// that many seconds between dictations, as a person would.
 
 let usage = """
     usage: mlx-eval --model swedish|swedish8|general|general8 --language <code> --clips <dir> --out <file.jsonl>
            mlx-eval --pipeline [--realtime 1] --model <as above> --language <code> ...
+           mlx-eval --pipeline --realtime 1 --model general8 --language sv [--background-split <store>] [--gap 2] ...
            mlx-eval --pipeline [--realtime 1] --model auto|auto8 --language auto ...
            mlx-eval --meeting [--speed 10] [--minutes 90] [--sample 60] --out <file.jsonl>
            mlx-eval --diarize --clips <dir> --rttm <dir> --out <file.jsonl>
@@ -193,7 +198,10 @@ if !pipeline {
     // matrix (KB on English included) can be measured; auto loads both and routes for real.
     let transcriber: Transcriber
     let choice: LanguageChoice
-    if let (general, swedish) = autoPairs[model], language == "auto" {
+    if args["background-split"] != nil || args["gap"] != nil {
+        transcriber = Transcriber(general: store.folder(ModelID.general8), swedish: store.folder(ModelID.swedish8), vad: sileroFolder)
+        choice = .explicit(language)
+    } else if let (general, swedish) = autoPairs[model], language == "auto" {
         transcriber = Transcriber(general: store.folder(general), swedish: store.folder(swedish), vad: sileroFolder)
         choice = .auto
     } else {
@@ -223,6 +231,23 @@ if !pipeline {
 
     let warm = try await dictate(try load(clips[0]))
     log("first dictation \(String(format: "%.2f", warm.releaseToFinal))s")
+    let gap = Double(args["gap"] ?? "0") ?? 0
+    let background = args["background-split"].map { path in
+        Task.detached { () -> (passes: Int, pieces: Int) in
+            let source = URL(fileURLWithPath: path), diarizer = MeetingDiarizer(models: diarizationModels)
+            var passes = 0, pieces = 0
+            while !Task.isCancelled {
+                let copy = FileManager.default.temporaryDirectory.appending(path: "bark-background-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: copy) }
+                guard (try? FileManager.default.copyItem(at: source, to: copy)) != nil, let meetings = try? MeetingStore(root: copy),
+                      let id = (try? meetings.meetings())?.first?.id,
+                      let report = try? await diarizer.run(id, store: meetings, transcriber: transcriber) else { break }
+                passes += 1
+                pieces += report.pieces
+            }
+            return (passes, pieces)
+        }
+    }
 
     struct Row: Encodable {
         let id: String
@@ -244,6 +269,7 @@ if !pipeline {
     }
     for (index, clip) in clips.enumerated() {
         let samples = try load(clip)
+        if gap > 0 { try await Task.sleep(for: .seconds(gap)) }
         let result = try await dictate(samples)
         let row = Row(id: String(clip.dropLast(4)), hypothesis: result.text, parts: result.segments.map(\.text),
                       segment_decode_seconds: result.segments.map(\.decodeSeconds),
@@ -257,6 +283,11 @@ if !pipeline {
                       detected: result.detection?.language, detected_probability: result.detection?.probability)
         try out.write(contentsOf: encoder.encode(row) + Data("\n".utf8))
         log("\(index + 1)/\(clips.count) \(row.id) \(String(format: "%.2f", row.release_to_final))s \(result.segments.count) parts \(row.model ?? "-")/\(row.language ?? "-")")
+    }
+    if let background {
+        background.cancel()
+        let (passes, pieces) = await background.value
+        log("background speaker pass: \(passes) passes, \(pieces) pieces re-decoded")
     }
 }
 log("peak memory \(gigabytes(Memory.peakMemory))")
