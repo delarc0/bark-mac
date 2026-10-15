@@ -54,7 +54,8 @@ fi
 
 STORE="$HOME/Library/Application Support/Bark/Models"
 EVAL="$HOME/Library/Application Support/Bark/eval/models"
-if [ -f "$STORE/kb-whisper-large-8bit/weights.safetensors" ] && [ -f "$STORE/whisper-large-v3-8bit/weights.safetensors" ]; then
+ready() { for f in config.json weights.safetensors tokenizer.json; do [ -f "$STORE/$1/$f" ] || return 1; done; }
+if ready kb-whisper-large-8bit && ready whisper-large-v3-8bit; then
   step "Models already in place"
 elif [ -d "$EVAL/kb-whisper-large-mlx" ] && [ -d "$EVAL/whisper-large-v3-mlx" ]; then
   step "Linking local eval models"
@@ -68,6 +69,10 @@ fi
 step "Generating Xcode project"
 xcodegen >/dev/null
 
+# xcodebuild adds Sparkle's pin to this tracked file; undo only that, never the user's own edits.
+resolved_clean=0
+git diff --quiet -- BarkKit/Package.resolved 2>/dev/null && resolved_clean=1
+
 step "Building Bark Dev (first build fetches Swift packages, a minute or two)"
 xcodebuild -project Bark.xcodeproj -scheme Bark -configuration Debug \
   -derivedDataPath build \
@@ -75,8 +80,7 @@ xcodebuild -project Bark.xcodeproj -scheme Bark -configuration Debug \
   build >/tmp/bark-build.log 2>&1 \
   || { tail -25 /tmp/bark-build.log; die "Build failed. Full log: /tmp/bark-build.log"; }
 
-# xcodebuild adds Sparkle's pin to this tracked file; keep checkouts clean.
-git checkout -- BarkKit/Package.resolved 2>/dev/null || true
+[ "$resolved_clean" = 1 ] && { git checkout -- BarkKit/Package.resolved 2>/dev/null || true; }
 
 APP="build/Build/Products/Debug/Bark Dev.app"
 [ -d "$APP" ] || die "Build reported success but $APP is missing."

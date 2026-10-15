@@ -40,14 +40,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// launch to recover from its audio.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let finishing = menuBar?.recorder.finishForQuit() else { return .terminateNow }
-        Task {
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { await finishing.value }
-                group.addTask { try? await Task.sleep(for: .seconds(15)) }
-                await group.next()
-                group.cancelAll()
-            }
+        // Awaiting another task's value cannot be cancelled, so a task group would wait for the
+        // finish anyway; two racers and a reply-once flag keep the 15 s cap.
+        var replied = false
+        let reply = { @MainActor in
+            guard !replied else { return }
+            replied = true
             sender.reply(toApplicationShouldTerminate: true)
+        }
+        Task { @MainActor in
+            await finishing.value
+            reply()
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(15))
+            reply()
         }
         return .terminateLater
     }
