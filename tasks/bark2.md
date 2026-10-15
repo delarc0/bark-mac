@@ -270,8 +270,11 @@ Each one bit Bark once. Each gets a test or an eval case.
 
 - About 30 minutes of his own Swedish/English dictation clips for the eval set.
 - Two or three meetings recorded with consent, for diarization and real-world WER.
-- Go to publish our KB-Whisper conversion (Apache 2.0, NOTICE crediting KBLab).
-  Gates P1.
+- Go to publish the two default models (KB-Whisper: Apache 2.0 with NOTICE
+  crediting KBLab; large-v3: MIT). Staged under `~/Library/Application
+  Support/Bark/publish/` with checksums verified against ModelStore.swift;
+  publishing is `BARK_PUBLISH_GO=1 BarkKit/scripts/publish-models.sh --upload`
+  then `--apply-urls`. Gates P1.
 - Which hq receives meetings.
 - Mockup approvals: notch preview, notepad, meeting view.
 - Audio retention period for meetings. Proposed default so the build does not
