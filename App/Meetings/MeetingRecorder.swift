@@ -178,6 +178,7 @@ final class MeetingRecorder {
         do {
             let result = try await session.finish()
             log.info("Meeting \(session.id, privacy: .public) done: \(result.segments, privacy: .public) segments, \(result.finishToDone, format: .fixed(precision: 2), privacy: .public) s to done")
+            library.diarize()
         } catch {
             // Left transcribing: the next launch recovers it from its audio.
             log.error("Meeting \(session.id, privacy: .public) did not finish: \(String(describing: error), privacy: .public)")

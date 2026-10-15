@@ -118,8 +118,10 @@ below hold the numbers.
   the client's language from hq); Auto is a choice, not the default. This uses
   the routing rule's explicit-language branch, so short segments of a Swedish
   meeting still go to KB.
-- Speakers: diarization (spike S5 picks SpeakerKit or FluidAudio); names from
-  calendar attendees once P3 exists, confirmed by the user.
+- Speakers: diarization after the meeting is done (S5: pyannote community-1
+  through FluidAudio's offline pipeline, models bundled); a call's mic is Me,
+  never diarized. Names from calendar attendees once P3 exists, confirmed by
+  the user; until then the user names a speaker with one click.
 - Detect and offer: in P2 on the audio signal alone (a known call app or a
   browser holds the mic); P3 adds calendar enrichment. Call-app list named in
   code; tapping a browser captures every tab, and the UI says so. Never
@@ -237,9 +239,9 @@ Each one bit Bark once. Each gets a test or an eval case.
       the known all-zero-buffer bug on macOS 26/27; AEC on vs off as Me-stream
       WER and bleed rate (share of Them words in the Me transcript) on laptop
       speakers; AirPods (HFP) vs wired Me-stream WER.
-  - S5 diarization: needs a mic-only multi-speaker recording (in-person
-    crosstalk, room acoustics) as well as a call; blocked on Erik's
-    recordings.
+  - S5 diarization: measured on English AMI meetings (S5 result); the
+    Swedish check (in-person crosstalk, room acoustics, a call) waits for
+    Erik's recordings.
   - S6 vocabulary prompting on KB: gain on terms vs inserted false words.
   - S7 long-meeting budget (see Meetings).
   - S2 SpeechAnalyzer Swedish preview: only if S1 misses D3.
@@ -1095,3 +1097,119 @@ Needs Erik's desk test:
 - The Model tab reads ~/Documents only when opened; a Debug build may get the
   Files and Folders prompt there.
 - Copy for approval: every new user-visible string is in the P2c report.
+
+## S5 result (2026-10-15): diarization
+
+Question: which of FluidAudio 0.17.7's diarizers (already a pinned
+dependency) gives "who said what" for a finished meeting.
+
+Data: six AMI test meetings (EN2002a, EN2002c, ES2004a, ES2004c, IS1009b,
+TS3003c; 3.6 h, 3 to 4 speakers each) in two forms: Mix-Headset (close-talk
+mix, the analogue of a call's them stream) and Array1-01 (one far-field mic,
+the analogue of an in-person room mic). Reference: BUT's AMI-diarization-setup
+`only_words` RTTMs. Scored with pyannote.metrics 4.1: DER with a 0.25 s collar,
+overlapped speech scored (so a system that gives one speaker at a time pays
+for overlap as miss). M5 Pro on a charger, other builds running beside it, so
+timings are indicative. Every candidate through one harness (process
+diarization only, Core ML models already compiled); data, hypotheses and
+`runs.jsonl` in `~/Library/Application Support/Bark/eval/ami`.
+
+Mix-Headset (call):
+
+| candidate | DER % | miss | FA | confusion | per meeting | speakers right | s per audio hour | peak MB | model | speaker cap | licence |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **offline (pyannote community-1)** | **19.8** | 16.4 | 1.3 | 2.0 | 12.1 to 29.9 | **6/6** | 17.8 | 990 | **22 MB** | none | CC-BY-4.0 |
+| Sortformer streaming v2.1 | 25.3 | 24.2 | 0.4 | 0.7 | 13.0 to 30.3 | 5/6 | 5.7 | 1042 | 252 MB | 4 | CC-BY-4.0 |
+| LS-EEND, AMI-trained | 17.2 | 9.7 | 2.0 | 5.4 | 6.3 to 25.5 | 5/6 | 14.7 | 643 | 43 MB | 4 | MIT |
+| LS-EEND, DIHARD3 | 39.4 | 26.3 | 2.0 | 11.1 | 21.4 to 55.5 | 5/6 | 17.7 | 644 | 43 MB | 4 | MIT |
+| Nemotron 3, offline | 24.3 | 23.6 | 0.4 | 0.3 | 12.7 to 29.0 | 5/6 | 3.0 | 692 | 193 MB | 8 | OpenMDW 1.1 |
+| Nemotron 3, fast128 | 24.3 | 23.6 | 0.4 | 0.3 | 12.8 to 29.2 | 6/6 | 4.0 | 669 | 202 MB | 8 | OpenMDW 1.1 |
+
+Array1-01 (room):
+
+| candidate | DER % | miss | FA | confusion | per meeting | speakers right | s per audio hour | peak MB |
+|---|---|---|---|---|---|---|---|---|
+| **offline (pyannote community-1)** | **21.5** | 17.5 | 1.5 | 2.5 | 12.6 to 31.3 | **6/6** | 17.8 | 1023 |
+| Sortformer streaming v2.1 | 27.4 | 24.5 | 0.7 | 2.3 | 13.6 to 38.1 | 5/6 | 4.7 | 1048 |
+| LS-EEND, AMI-trained | 80.4 | 54.3 | 0.5 | 25.5 | 61.9 to 94.1 | 1/6 | 14.3 | 643 |
+| LS-EEND, DIHARD3 | 53.0 | 30.2 | 1.9 | 21.0 | 41.7 to 70.1 | 3/6 | 16.9 | 644 |
+| Nemotron 3, offline | 25.9 | 24.5 | 0.8 | 0.6 | 13.0 to 31.9 | 5/6 | 2.5 | 688 |
+| Nemotron 3, fast128 | 25.7 | 24.3 | 0.8 | 0.6 | 13.2 to 30.8 | 5/6 | 3.8 | 670 |
+
+"Speakers right": meetings where the speaker count matched (a miss was always
+one too many). Peak MB is the process's lifetime peak footprint. Loading the
+compiled models takes about 0.1 s once Core ML has compiled them on this Mac;
+that first compile was not measured apart from the download.
+
+What Bark actually needs is not DER but the right speaker per transcript
+segment. Simulated with Bark's own rule (speech merged across pauses under
+0.5 s, at most 28 s, each segment given the speaker with the largest overlap,
+labels mapped one to one): an oracle diarizer gets 73.8% of the speech right,
+offline 72.2 / 72.0%, Nemotron 3 73.2 / 72.8%, Sortformer 72.9 / 71.4% (call /
+room). The ceiling is the segments, not the diarizer: AMI is fast back and
+forth, and one pause-closed segment often holds two people. Splitting a
+segment where the speaker changes (Whisper word times or the turns themselves)
+is the next gain, not a better diarizer.
+
+Pick: the offline pipeline (pyannote community-1 segmentation, WeSpeaker
+ResNet34 embeddings, PLDA plus VBx clustering). Lowest DER of the general
+models on both mics and the right speaker count in all 12 runs, no speaker
+cap, 22 MB so it ships inside the app like Silero (no download, no Hugging
+Face at runtime), CC-BY-4.0. A 90-minute meeting takes about 20 to 30 s.
+Runner-up: Nemotron 3 (lowest confusion, 6x faster, 1 point closer to the
+ceiling) but 193 MB, 8 speakers at most and over-counts more often; worth
+re-measuring on Swedish recordings. Sortformer and LS-EEND stop at 4 speakers;
+LS-EEND's AMI model is trained on AMI (its 17.2 is in-domain) and falls apart
+on the far mic. VoxConverse was not run.
+
+Not measured: Swedish. There is no Swedish multi-speaker recording yet; Erik's
+recordings (an in-person meeting and a call) decide whether the pick holds,
+and `mlx-eval --diarize` runs them as the app does.
+
+### Built on the pick
+
+- `MeetingDiarizer` (BarkEngine): a pass after the meeting is done, never
+  blocking the transcript. Each stream that can hold several people (them; a
+  room or in-person mic; both streams of a hybrid) is diarized from its
+  archived CAF, or its PCM when archiving failed; a call's me stream is the
+  user and gets `Me` without diarizing. Each segment with words gets the
+  speaker with the largest overlap (BarkCore `SpeakerAttribution`), speakers
+  are labelled Speaker 1...n in order of first appearance, names nil. Models
+  load per meeting from the folder it is given, built directly from the
+  compiled models (FluidAudio's own loader downloads what is missing).
+- Models: `App/Resources/speaker-diarization` (Segmentation, FBank, Embedding,
+  PldaRho, plda-parameters.json; 21 MB; every file matches the sha256 in Fluid
+  Inference's provenance.json) plus its NOTICE.md and CC-BY-4.0 LICENSE.
+  Bundled rather than a ModelStore manifest entry: the smaller change (a
+  folder reference, as Silero), works offline, and ModelStore's URLs are still
+  placeholders.
+- Store v3: `meetings.diarization` pending | running | done | failed. `finish`
+  sets pending in its transaction; `saveSpeakers` replaces the speakers, points
+  the segments at them, marks done and queues the meeting for hq again, in one
+  transaction. The migration marks finished meetings with audio pending, so
+  older meetings get speakers too. A pass found running at launch was cut
+  short by a crash and is marked failed, never retried (a meeting that crashes
+  the diarizer cannot crash every launch); a quit puts it back to pending.
+- App: `MeetingLibrary.diarize()` runs pending meetings one at a time at
+  utility priority after a meeting finishes, after recovery and at launch.
+  The Meetings window shows the speaker on Them and room lines ("Finding who
+  said what…" until then); one click on it opens a name field, Return saves,
+  an empty name restores the label, and a finished meeting goes to hq again.
+  Copy Transcript uses the names.
+- Shipped path on the same AMI set (`mlx-eval --diarize`, bundled models):
+  DER 19.8 / 21.5%, identical to the spike, 12.5 s per audio hour.
+
+Tests: SpeakerAttribution (overlap, ties, no overlap, numbering), store v2 to
+v3 upgrade, speaker save and the cut-short rule, an hq re-push carrying the
+speakers and then the name, the role and labelling rules, and an end-to-end
+pass on 90 s of AMI TS3003c as a call's them stream (two people, from PCM and
+from CAF: 99.5% of the speech attributed to the right person; skips without
+the eval data).
+
+Open:
+- Swedish accuracy on real recordings (above).
+- CC-BY-4.0 asks for attribution: the NOTICE ships in the app bundle; an
+  in-app credits line (About or Settings) is Erik's call.
+- The diarizer runs beside a meeting that has just started (ANE and CPU at
+  utility priority); not measured against live decoding.
+- Speaker turns inside one segment (see the ceiling above).

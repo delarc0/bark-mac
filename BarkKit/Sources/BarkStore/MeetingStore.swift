@@ -10,6 +10,11 @@ public enum MeetingStatus: String, Sendable {
     case recording, transcribing, done, interrupted
 }
 
+/// Who said what, worked out after the meeting is done: the transcript never waits for it.
+public enum DiarizationState: String, Sendable {
+    case pending, running, done, failed
+}
+
 /// The audio streams of a meeting, never mixed: the mic (me), system audio (them), or a mic that
 /// hears the whole room.
 public enum MeetingStream: String, Sendable, CaseIterable {
@@ -25,6 +30,8 @@ public struct Meeting: Sendable, Equatable {
     public let mode: MeetingMode
     public let status: MeetingStatus
     public let audioDeletedAt: Date?
+    /// nil until the meeting is done.
+    public let diarization: DiarizationState?
 }
 
 /// A decoded stretch of one stream. Times are seconds from the meeting's start. An empty text is a
@@ -165,6 +172,11 @@ public final class MeetingStore: Sendable {
         DROP TABLE outbox;
         ALTER TABLE outbox_v2 RENAME TO outbox;
         """,
+        // v3: speakers are found after a meeting is done; finished meetings with audio get them too.
+        """
+        ALTER TABLE meetings ADD COLUMN diarization TEXT CHECK (diarization IN ('pending', 'running', 'done', 'failed'));
+        UPDATE meetings SET diarization = 'pending' WHERE status = 'done' AND audio_deleted_at IS NULL;
+        """,
     ]
 
     public init(root: URL = MeetingStore.defaultRoot) throws {
@@ -199,15 +211,19 @@ public final class MeetingStore: Sendable {
         return try meeting(id)!
     }
 
-    private static let meetingColumns = "id, started_at, ended_at, title, language, mode, status, audio_deleted_at"
+    private static let meetingColumns = "id, started_at, ended_at, title, language, mode, status, audio_deleted_at, diarization"
 
     private static func meeting(_ row: SQLRow) throws -> Meeting {
         guard let id = UUID(uuidString: row.text(0)), let mode = MeetingMode(rawValue: row.text(5)),
               let status = MeetingStatus(rawValue: row.text(6)) else { throw StoreError("malformed meeting row \(row.text(0))") }
+        let diarization = try row.optionalText(8).map { text in
+            guard let state = DiarizationState(rawValue: text) else { throw StoreError("malformed meeting row \(row.text(0))") }
+            return state
+        }
         return Meeting(id: id, startedAt: Date(timeIntervalSince1970: row.double(1)),
                        endedAt: row.optionalDouble(2).map(Date.init(timeIntervalSince1970:)),
                        title: row.optionalText(3), language: row.text(4), mode: mode, status: status,
-                       audioDeletedAt: row.optionalDouble(7).map(Date.init(timeIntervalSince1970:)))
+                       audioDeletedAt: row.optionalDouble(7).map(Date.init(timeIntervalSince1970:)), diarization: diarization)
     }
 
     public func meeting(_ id: UUID) throws -> Meeting? {
@@ -234,10 +250,11 @@ public final class MeetingStore: Sendable {
                    [status.rawValue, endedAt?.timeIntervalSince1970, id.uuidString])
     }
 
-    /// Marks the meeting done and queues it for hq, in one transaction.
+    /// Marks the meeting done, queues it for hq and leaves its speakers to be found, in one transaction.
     public func finish(_ id: UUID, endedAt: Date) throws {
         try db.transaction {
             try setStatus(id, .done, endedAt: endedAt)
+            try setDiarization(id, .pending)
             try enqueue(id)
         }
     }
@@ -289,6 +306,39 @@ public final class MeetingStore: Sendable {
 
     public func nameSpeaker(_ id: Int64, _ name: String?) throws {
         try db.run("UPDATE speakers SET name = ? WHERE id = ?", [name, id])
+    }
+
+    public func setDiarization(_ id: UUID, _ state: DiarizationState) throws {
+        try db.run("UPDATE meetings SET diarization = ? WHERE id = ?", [state.rawValue, id.uuidString])
+    }
+
+    /// Done meetings whose speakers are still to be found, oldest first.
+    public func pendingDiarization() throws -> [Meeting] {
+        try db.query("SELECT \(Self.meetingColumns) FROM meetings WHERE status = 'done' AND diarization = 'pending' ORDER BY started_at",
+                     [], Self.meeting)
+    }
+
+    /// Diarizations a crash or kill cut short are marked failed, not retried, so a meeting that
+    /// crashes the diarizer cannot crash every launch. Returns how many there were.
+    @discardableResult
+    public func failInterruptedDiarization() throws -> Int {
+        try db.run("UPDATE meetings SET diarization = 'failed' WHERE diarization = 'running'")
+    }
+
+    /// Replaces the meeting's speakers with `labels` (names unset) and points each segment in
+    /// `assignments` (segment id to an index in `labels`) at its speaker; other segments get none.
+    /// Marks diarization done and queues the meeting for hq again, in one transaction.
+    public func saveSpeakers(_ meeting: UUID, labels: [String], assignments: [Int64: Int]) throws {
+        try db.transaction {
+            try db.run("UPDATE segments SET speaker_id = NULL WHERE meeting_id = ?", [meeting.uuidString])
+            try db.run("DELETE FROM speakers WHERE meeting_id = ?", [meeting.uuidString])
+            let ids = try labels.map { try addSpeaker($0, to: meeting) }
+            for (segment, index) in assignments {
+                try db.run("UPDATE segments SET speaker_id = ? WHERE id = ? AND meeting_id = ?", [ids[index], segment, meeting.uuidString])
+            }
+            try setDiarization(meeting, .done)
+            try enqueue(meeting)
+        }
     }
 
     public func speakers(_ meeting: UUID) throws -> [Speaker] {

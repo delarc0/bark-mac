@@ -36,6 +36,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SettingsWindowController.shared.present(tab: .meetings)
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        MeetingLibrary.shared.willTerminate()
+    }
+
     /// A meeting still recording is finished before quitting; past 15 s it is left for the next
     /// launch to recover from its audio.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

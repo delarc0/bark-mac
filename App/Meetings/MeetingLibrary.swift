@@ -5,7 +5,7 @@ import Foundation
 import UserNotifications
 import os
 
-/// The meetings on this Mac and the chores around them: recovery, audio retention and hq.
+/// The meetings on this Mac and the chores around them: recovery, speakers, audio retention and hq.
 @MainActor
 final class MeetingLibrary {
     static let shared = MeetingLibrary()
@@ -18,6 +18,11 @@ final class MeetingLibrary {
     let hq: HQLink
     private let log = Logger(subsystem: "se.lab37.bark.mac", category: "Meetings")
     private var retentionTimer: Timer?
+    /// nil when the bundled models are missing; meetings then wait with speakers pending.
+    private let diarizer: MeetingDiarizer?
+    private var diarizing: Task<Void, Never>?
+    private var diarizingMeeting: UUID?
+    private var diarizeAgain = false
 
     private init() {
         var store: MeetingStore?
@@ -28,6 +33,8 @@ final class MeetingLibrary {
         }
         self.store = store
         hq = HQLink(store: store)
+        let models = Bundle.main.resourceURL!.appending(path: "speaker-diarization")
+        diarizer = MeetingDiarizer.modelsPresent(in: models) ? MeetingDiarizer(models: models) : nil
     }
 
     /// Once per launch, before a meeting can start: what a crash or quit left unfinished is listed
@@ -50,10 +57,56 @@ final class MeetingLibrary {
         }
         RunLoop.main.add(timer, forMode: .common)
         retentionTimer = timer
+        do {
+            let cut = try store.failInterruptedDiarization()
+            if cut > 0 { log.warning("\(cut, privacy: .public) speaker passes were cut short and are not retried") }
+        } catch {
+            log.error("Reading speaker passes failed: \(String(describing: error), privacy: .public)")
+        }
         if !unfinished.isEmpty {
             Task { await recover(unfinished, models: models) }
         }
+        diarize()
         hq.sync()
+    }
+
+    /// Finds the speakers of every done meeting still waiting for them, one meeting at a time in
+    /// the background. Each one is sent to hq again with its speakers.
+    func diarize() {
+        guard let store, let diarizer else { return }
+        guard diarizing == nil else {
+            diarizeAgain = true
+            return
+        }
+        diarizing = Task {
+            repeat {
+                diarizeAgain = false
+                for meeting in (try? store.pendingDiarization()) ?? [] {
+                    diarizingMeeting = meeting.id
+                    let failure = await Task.detached(priority: .utility) { () -> String? in
+                        do {
+                            try await diarizer.run(meeting.id, store: store)
+                            return nil
+                        } catch {
+                            return String(describing: error)
+                        }
+                    }.value
+                    diarizingMeeting = nil
+                    if let failure {
+                        log.error("Speakers of meeting \(meeting.id, privacy: .public) failed: \(failure, privacy: .public)")
+                    }
+                    notifyChanged()
+                    hq.sync()
+                }
+            } while diarizeAgain
+            diarizing = nil
+        }
+    }
+
+    /// A speaker pass cut short by quitting runs again at the next launch.
+    func willTerminate() {
+        guard let store, let id = diarizingMeeting else { return }
+        try? store.setDiarization(id, .pending)
     }
 
     func notifyChanged() {
@@ -91,6 +144,7 @@ final class MeetingLibrary {
         guard recovered > 0 else { return }
         notifyChanged()
         hq.sync()
+        diarize()
         await notifyRecovered(recovered)
     }
 
