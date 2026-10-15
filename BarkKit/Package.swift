@@ -55,5 +55,6 @@ let package = Package(
             name: "fluid-eval",
             dependencies: [.product(name: "FluidAudio", package: "FluidAudio")]
         ),
+        .executableTarget(name: "capture-probe", dependencies: ["BarkCapture", "BarkCore"]),
     ]
 )
