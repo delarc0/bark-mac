@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 #
-# Bark installer — builds from source and installs to /Applications.
-# One command, no Apple Developer account needed. Apple Silicon + macOS 14+.
+# Bark2 dev installer: builds "Bark Dev.app" from source and copies it to ~/Applications.
+# It has its own bundle id (se.lab37.bark.mac.dev), so it runs beside a shipped Bark
+# and never touches it. Apple Silicon + macOS 26, full Xcode, no Apple Developer account.
 #
 #   ./install.sh
-#
-# What it does: checks prerequisites, generates the Xcode project, builds a
-# Debug app, code-signs it (self-signed "Bark Dev" cert if you made one,
-# otherwise ad-hoc), installs to /Applications, and launches it.
 
 set -euo pipefail
 
@@ -18,19 +15,15 @@ step() { printf "%s==>%s %s\n" "$GREEN$BOLD" "$RST" "$1"; }
 warn() { printf "%s!  %s%s\n" "$YELLOW" "$1" "$RST"; }
 die()  { printf "%sx  %s%s\n" "$RED" "$1" "$RST" >&2; exit 1; }
 
-# --- Preflight ---------------------------------------------------------------
-
 step "Checking prerequisites"
 
 [ "$(uname -m)" = "arm64" ] || die "Bark requires Apple Silicon (arm64). This Mac is $(uname -m)."
 
 os_major="$(sw_vers -productVersion | cut -d. -f1)"
-[ "$os_major" -ge 14 ] 2>/dev/null || die "Bark requires macOS 14 or later. This Mac is $(sw_vers -productVersion)."
+[ "$os_major" -ge 26 ] 2>/dev/null || die "Bark requires macOS 26 or later. This Mac is $(sw_vers -productVersion)."
 
-if ! xcodebuild -version >/dev/null 2>&1; then
-  die "Full Xcode is required (Command Line Tools alone can't build this).
-   Install Xcode from the App Store, then run:  sudo xcode-select -s /Applications/Xcode.app"
-fi
+xcodebuild -version >/dev/null 2>&1 || die "Full Xcode is required (Command Line Tools alone can't build this).
+   Install Xcode, then run:  sudo xcode-select -s /Applications/Xcode.app"
 
 if ! command -v xcodegen >/dev/null 2>&1; then
   if command -v brew >/dev/null 2>&1; then
@@ -43,16 +36,31 @@ if ! command -v xcodegen >/dev/null 2>&1; then
 fi
 
 # --- Signing identity --------------------------------------------------------
-# Prefer the optional self-signed "Bark Dev" cert (keeps mic/Accessibility
-# grants across rebuilds). Fall back to ad-hoc, which works with zero setup.
+# The optional self-signed "Bark Dev" cert keeps mic/Accessibility grants across
+# rebuilds; otherwise the build is signed ad-hoc.
 
 SIGN_ID="-"
 if security find-identity -v -p codesigning 2>/dev/null | grep -q '"Bark Dev"'; then
   SIGN_ID="Bark Dev"
-  step "Signing with self-signed 'Bark Dev' identity (grants persist across rebuilds)"
+  step "Signing with the self-signed 'Bark Dev' identity (grants persist across rebuilds)"
 else
-  step "Signing ad-hoc (fine for use; permissions reset if you rebuild)"
+  step "Signing ad-hoc (permissions reset if you rebuild)"
   printf "%s   Tip: run ./scripts/create-signing-cert.sh once to make rebuilds keep your grants.%s\n" "$DIM" "$RST"
+fi
+
+# --- Models ------------------------------------------------------------------
+# Not published yet: link the local eval conversions into the app's model folder,
+# but only when the 8-bit default models are missing and the eval models exist.
+
+STORE="$HOME/Library/Application Support/Bark/Models"
+EVAL="$HOME/Library/Application Support/Bark/eval/models"
+if [ -f "$STORE/kb-whisper-large-8bit/weights.safetensors" ] && [ -f "$STORE/whisper-large-v3-8bit/weights.safetensors" ]; then
+  step "Models already in place"
+elif [ -d "$EVAL/kb-whisper-large-mlx" ] && [ -d "$EVAL/whisper-large-v3-mlx" ]; then
+  step "Linking local eval models"
+  BarkKit/scripts/dev-models.sh
+else
+  warn "No models in $STORE and no eval models in $EVAL; the app will have nothing to transcribe with."
 fi
 
 # --- Build -------------------------------------------------------------------
@@ -60,41 +68,37 @@ fi
 step "Generating Xcode project"
 xcodegen >/dev/null
 
-step "Building Bark (first build fetches Swift packages — a minute or two)"
+step "Building Bark Dev (first build fetches Swift packages, a minute or two)"
 xcodebuild -project Bark.xcodeproj -scheme Bark -configuration Debug \
   -derivedDataPath build \
   BARK_SIGN_IDENTITY="$SIGN_ID" \
   build >/tmp/bark-build.log 2>&1 \
   || { tail -25 /tmp/bark-build.log; die "Build failed. Full log: /tmp/bark-build.log"; }
 
-APP="build/Build/Products/Debug/Bark.app"
+# xcodebuild adds Sparkle's pin to this tracked file; keep checkouts clean.
+git checkout -- BarkKit/Package.resolved 2>/dev/null || true
+
+APP="build/Build/Products/Debug/Bark Dev.app"
 [ -d "$APP" ] || die "Build reported success but $APP is missing."
 
 # --- Install -----------------------------------------------------------------
 
-step "Installing to /Applications"
-pkill -f "Bark.app/Contents/MacOS/Bark" 2>/dev/null || true
+DEST="$HOME/Applications/Bark Dev.app"
+step "Installing to ~/Applications"
+mkdir -p "$HOME/Applications"
+pkill -f "Bark Dev.app/Contents/MacOS/Bark Dev" 2>/dev/null || true
 sleep 1
-rm -rf /Applications/Bark.app
-cp -R "$APP" /Applications/Bark.app
-codesign --force --deep --sign "$SIGN_ID" /Applications/Bark.app >/dev/null 2>&1 || true
+rm -rf "$DEST"
+cp -R "$APP" "$DEST"
+codesign --force --deep --sign "$SIGN_ID" "$DEST" >/dev/null 2>&1 || true
 
-step "Launching Bark"
-open /Applications/Bark.app
+cat <<MSG
 
-cat <<EOF
+${GREEN}${BOLD}Bark Dev is installed${RST} at $DEST. Open it from there; it does not replace a shipped Bark.
 
-${GREEN}${BOLD}Bark is installed and running.${RST} Look for the paw icon in your menu bar.
+${BOLD}First run:${RST} grant Microphone and Accessibility when asked, then hold ${BOLD}Right Option${RST},
+speak, release. The hotkey is changeable in Settings.
 
-${BOLD}First run:${RST}
-  1. An onboarding window walks you through two permissions:
-       • Microphone  — to hear you
-       • Accessibility — to detect the hotkey and paste at your cursor
-     Toggle Bark on in System Settings when prompted.
-  2. The speech model (~1.5 GB) downloads on first use. One-time.
-  3. Hold ${BOLD}Right Option${RST}, speak, release. Text appears at your cursor.
-     Change the hotkey any time in the menu bar → Settings → Hotkey.
-
-${DIM}Ad-hoc builds: macOS forgets the permissions each time you rebuild. If you
-plan to iterate, run ./scripts/create-signing-cert.sh once, then ./install.sh.${RST}
-EOF
+${DIM}Ad-hoc builds: macOS forgets the permissions each time you rebuild. If you plan to
+iterate, run ./scripts/create-signing-cert.sh once, then ./install.sh.${RST}
+MSG

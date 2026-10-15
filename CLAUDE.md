@@ -1,8 +1,6 @@
-# Bark-Mac — Claude Code context
+# Bark-Mac: Claude Code context
 
-## Bark2 (branch bark2)
-
-The rebuild in progress; PRD, decisions and every measurement live in `tasks/bark2.md`. The rest of this file describes the shipping app on main.
+Bark2 (ships as Bark 1.0.0 over 0.2.3). PRD, decisions and every measurement live in `tasks/bark2.md`; read its "Problems to solve", "Architecture" and "Lessons that become tests" first. Private repo: `github.com/delarc0/bark-mac`. Author Erik `<erik@lab37.io>`.
 
 - `BarkKit/` is one Swift package (tools 6.2, macOS 26, Swift 6, deps pinned exact, `Package.resolved` committed):
   - `BarkCore`, pure and dependency-free: `Routing` (KB only on explicit `sv` or a fresh detection of >= 1 s and >= 0.85; a remembered language prefills, never routes), `TextCleanup`, `SegmentCut` (28 s cut).
@@ -11,144 +9,16 @@ The rebuild in progress; PRD, decisions and every measurement live in `tasks/bar
   - `BarkCapture`: `MicCapture` (AVAudioEngine to 16 kHz mono chunks on an `AsyncStream`, device by UID, rebuilds on reconfiguration or a rate change), `AudioInputs`. Its pure rules live in BarkCore `CaptureRules` (`ChannelSelector`: lowest channel at speech level, so loopback cannot hold it; `InputHealth`: digital silence = dead, zero callbacks = transient; `LegacySettings`).
   - `mlx-eval`: the eval CLI on BarkEngine (engine-only, `--pipeline`, `--realtime 1`, `--language auto`, `--meeting` = the S7 budget: a two-stream Swedish call from eval clips fed at `--speed` x real time; its store lives in `eval/meeting/store`). `bark-eval`, `stream-eval`, `fluid-eval` are frozen spike tools on WhisperKit.
 - Build and test: `cd BarkKit && swift build && swift test`. Tests that need models or eval clips skip when they are absent.
-- App (`App/`, branch bark2-app): thin AppKit/SwiftUI on BarkKit. `Dictation` (press: `MicCapture` feeds a `DictationSession`, created only once the hold passes 200 ms; release: finish, paste; 300 s hard stop; an abandoned dictation is cancelled, never finished), `HotkeyMonitor` (listen-only tap, device-specific modifier masks, re-enable plus key-state re-check), `Paste` (Cmd-V with V resolved from the current layout, ConcealedType, 150 ms restore unless changeCount moved), `Models` (ModelStore readiness, download, Transcriber lifecycle; Silero loads straight from the bundled `App/Resources/silero-vad`), `Overlay/`, `MenuBarController`, `Settings/`, `Onboarding/`, `Updater` (Sparkle, Release only).
-- Build the app: `xcodegen && xcodebuild -project Bark.xcodeproj -scheme Bark -configuration Debug -derivedDataPath build build` (signing as below, Debug re-signs ad-hoc). Debug is "Bark Dev", `se.lab37.bark.mac.dev`, its own UserDefaults domain and TCC grants, Sparkle off; Release is "Bark", `se.lab37.bark.mac`, Sparkle feed and EdDSA key as 0.2.x. Release reads 0.2.x's hotkey, device UID and language keys; every other setting lives under new `bark2.*` keys. `install.sh` and `scripts/release.sh` still describe the 0.2.x app. An app build writes Sparkle's pin into `BarkKit/Package.resolved` (Xcode uses it as the workspace's resolved file); do not commit that, `swift package resolve` in BarkKit puts it back.
+- App (`App/`): thin AppKit/SwiftUI on BarkKit. `Dictation` (press: `MicCapture` feeds a `DictationSession`, created only once the hold passes 200 ms; release: finish, paste; 300 s hard stop; an abandoned dictation is cancelled, never finished), `HotkeyMonitor` (listen-only tap, device-specific modifier masks, re-enable plus key-state re-check), `Paste` (Cmd-V with V resolved from the current layout, ConcealedType, 150 ms restore unless changeCount moved), `Models` (ModelStore readiness, download, Transcriber lifecycle; Silero loads straight from the bundled `App/Resources/silero-vad`), `Overlay/`, `MenuBarController`, `Settings/`, `Onboarding/`, `Updater` (Sparkle, Release only).
+- Build the app: `xcodegen && xcodebuild -project Bark.xcodeproj -scheme Bark -configuration Debug -derivedDataPath build build` (signing as below, Debug re-signs ad-hoc). Debug is "Bark Dev", `se.lab37.bark.mac.dev`, its own UserDefaults domain and TCC grants, Sparkle off; Release is "Bark", `se.lab37.bark.mac`, Sparkle feed and EdDSA key as 0.2.x. Release reads 0.2.x's hotkey, device UID and language keys; every other setting lives under new `bark2.*` keys. `install.sh` builds and installs Bark Dev to `~/Applications`; `scripts/release.sh` is the only release path. An app build writes Sparkle's pin into `BarkKit/Package.resolved` (Xcode uses it as the workspace's resolved file); do not commit that, `swift package resolve` in BarkKit puts it back.
 - Models: `~/Library/Application Support/Bark/Models/<id>/{config.json,weights.safetensors,tokenizer.json}`, ids `kb-whisper-large[-8bit]` and `whisper-large-v3[-8bit]`. Not published yet (manifest URLs are a placeholder); `BarkKit/scripts/dev-models.sh` links the local eval conversions into that layout and makes the 8-bit large-v3 with `scripts/quantize.py`. 8-bit is the default (P1a: same WER as fp16, half the memory).
 - Eval: `BarkKit/eval/p1a.sh [fp16] [q8]` runs every set through `DictationSession` and gates against `eval/baseline-mlx.json`; `eval/mlx.sh` is the engine-only S8 run. Data and results stay outside git in `~/Library/Application Support/Bark/eval`. Timings only count on a full-power charger.
 
-Native macOS dictation tool. Swift/AppKit + WhisperKit. Mac-only fork of the cross-platform Python [`bark/`](../bark/) (which stays alive for Windows). Private repo: `github.com/delarc0/bark-mac`.
-
-## Ownership / identity
-
-- Author: Erik `<erik@lab37.io>`
-- Bundle ID: `se.lab37.bark.mac`
-- Target: macOS 14+, Apple Silicon only
-
-## Stack
-
-- Swift 5.9, SwiftUI + AppKit, `LSUIElement=YES` menu bar app
-- **argmax-oss-swift 1.1.0** via SPM (the renamed successor to `argmaxinc/WhisperKit`; 0.18.0 was the last 0.x). The `WhisperKit` product only: the `ArgmaxOSS` umbrella pulls `TTSKit`, which raises the floor to macOS 15 for a feature Bark does not ship.
-- **Dual model, routed by language** (`Transcriber.ModelRole`): `sv` → `kb-whisper-large`, everything else → `openai_whisper-large-v3` (full, not turbo). KB-Whisper halves Swedish errors (4.56% vs 8.43% WER on FLEURS) but is unusable on English (40.85%): the Swedish fine-tune overrides the task and silently TRANSLATES English audio into Swedish, so single-model is not an option. Language detection always runs on the general model, which is not a Swedish fine-tune and is therefore a trustworthy judge. KB loads under the large-v3 *tokenizer* name (`ModelRole.tokenizerVariant`) while its weights come from its own folder; KB kept Whisper's tokenizer, which is what makes that work.
-- AVAudioEngine for mic capture, downsamples 48k → 16k mono Float32
-- XcodeGen (`project.yml` is source of truth; `Bark.xcodeproj` is gitignored)
-
-## Build / run
-
-Canonical path (works on any Apple Silicon Mac, no Apple account):
-
-```bash
-./install.sh
-```
-
-Builds, signs, installs to `/Applications`, launches. Manual path:
-
-```bash
-brew install xcodegen
-xcodegen
-xcodebuild -project Bark.xcodeproj -scheme Bark -configuration Debug -derivedDataPath build build
-open build/Build/Products/Debug/Bark.app
-```
-
-First launch triggers WhisperKit model download (~1.5 GB for large-v3-turbo) and prompts for mic permission. Subsequent launches are fast; model cached at `~/Documents/huggingface/models/argmaxinc/whisperkit-coreml/`.
-
-For sharing / handing to an agent: `AGENTS.md` is the install guide, `README.md` is the human intro.
-
-## Compute path (important)
-
-`Transcriber` defaults to **GPU encoder + ANE decoder** — the optimal Apple Silicon path. But the ANE decoder path **wedges (indefinite busy-spin) on some chips**: confirmed on M1 (2026-04-18) and **M2 Max** (beta report, 2026-07). M5 Pro works. Do NOT assume the hang is M1-only.
-
-Fallback is `cpuAndGPU` for both models, reachable three ways:
-
-1. **Self-heal (automatic):** `Transcriber.warmupSelfHealing()` runs the launch warmup under a 30s wedge detector; healthy warmup is 1-8s. On timeout it persists the CPU+GPU fallback (`transcriber.cpuOnly`), rebuilds the pipeline on CPU+GPU, and re-warms. The wedged task cannot be cancelled (WhisperKit limitation) and may spin at ~100% CPU until relaunch.
-2. **Settings → Model → "Use CPU + GPU only"** — persisted UserDefaults toggle (`transcriber.cpuOnly`), survives Finder relaunches.
-3. **Env override:** `BARK_CPU_ONLY=1 ./build/Build/Products/Debug/Bark.app/Contents/MacOS/Bark`. Env vars don't propagate reliably through `open`, so launch the binary directly. Mostly useful for testing; users should rely on 1 or 2.
-
 ## Conventions
 
-- **The Swedish weights are ours, converted from KBLab's official Apache-2.0 checkpoint with whisperkittools** and verified byte-identical to the community build on a reference clip. Recipe and licence obligations: `tasks/kb-whisper-spike.md`. They are NOT published yet, so `ModelRole.swedish.repo` (`lab37/kb-whisper-coreml`) has no download source: a machine without the local folder falls back to the general model for Swedish.
-- **Language prefill and model routing are two different decisions. Do not re-merge them.** `resolveAutoLanguage` returns a `LanguageDecision` carrying `routable`. A *remembered* language (`lastConfidentLanguage`, used when this clip's detection is short or weak) is good enough to prefill the general model's first token, because guessing wrong there still transcribes the words. It is NOT good enough to switch models: KB-Whisper's failure mode on non-Swedish audio is silent TRANSLATION into Swedish, not degradation. Routing to KB therefore requires either an explicit user language, or a fresh detection on THIS audio that is >= 1s and >= 0.85 confidence. Proven live 2026-09-19: before this split, a short English "keep going" dictated after a Swedish one came back as Swedish prose.
-- **`beginDictationSession()` must be called on every dictation start** (it is, unconditionally, in `DictationCoordinator.handlePressed`). It clears the per-session language pin. The pin deliberately survives *within* one dictation so streaming chunks of one utterance cannot diverge into different models mid-sentence; if it ever stopped being reset per press, English spoken after Swedish would route to KB and come back translated.
-- **The Swedish model loads in the background, never on the critical path.** `prepareSwedishModel()` runs strictly after the general model is warm. Until it is ready, Swedish dictation falls back to the general model for that clip rather than making the user wait on a cold multi-GB load. Only the general model drives `Transcriber.State`, so a background Swedish load can never paint the UI as not-ready or failed.
-- **No code comments** unless genuinely non-obvious (a hidden invariant, a workaround for a specific bug). Don't narrate what the code does.
-- **Signing (until Apple Developer ID lands):** `project.yml` compiles ad-hoc (`CODE_SIGN_IDENTITY: "-"`) so a clean checkout builds on any Mac and the SPM dependency targets never demand a development team. The post-build phase deep-re-signs the bundle to unify nested-dylib Team IDs and, when `install.sh` passes `BARK_SIGN_IDENTITY="Bark Dev"` (the optional self-signed cert from `scripts/create-signing-cert.sh`), upgrades to it so TCC grants survive rebuilds. Never pass `CODE_SIGN_IDENTITY="Bark Dev"` on the xcodebuild CLI — it leaks to the SPM targets and fails the build; the identity is applied only by the post-build re-sign. Ad-hoc builds still reset permissions on each rebuild. Release builds are different: the archive stays ad-hoc and `xcodebuild -exportArchive` re-signs with the Developer ID cert per `distribution/ExportOptions.plist` (the Debug-only post-build re-sign is guarded on `${CONFIGURATION}` so it can't interfere).
-- UserDefaults for settings, not migrated from Python Bark's `bark_config.json`. Clean slate.
-
-## Roadmap status (2026-04-18)
-
-- [x] Phase 0 — menu bar skeleton
-- [x] Phase 1 — AudioRecorder (AVAudioEngine, device picker)
-- [x] Phase 2 — WhisperKit transcription (large-v3-turbo, eager load + 1s silent warmup on launch → instant first click)
-- [x] Phase 3 — CGEventTap hotkey (right-Option hold) + paste (NSPasteboard + synthesized ⌘V with clipboard save/restore) — validated end-to-end 2026-04-18
-- [x] Phase 4 — Overlay pill (NSPanel + SwiftUI) + Settings window (hotkey picker, model, language, audio device) — shipped 2026-04-18
-- [x] Phase 5a — Onboarding flow + Sparkle SDK wired (infra only; can't ship updates until Dev ID lands) — shipped 2026-04-18
-- [x] Phase 5b — **SHIPPED 2026-07-17**: Bark 0.2.0 is the first signed + notarized release (Developer ID, LAB37 Media AB, Team ID `4D2U237VRC`). Live appcast at `delarc0.github.io/bark-mac/appcast.xml`; GitHub Release carries a drag-to-Applications DMG (human install) + zip (Sparkle enclosure). `./scripts/release.sh X.Y.Z --publish` cuts a release end to end; `--check` probes machine readiness. TCC grants now survive updates.
-
-**All phases complete.** Launch-at-login (SMAppService) and model-download progress UX (menu/overlay/onboarding) landed on main after the 0.2.0 cut — they ship with the next release.
-
-## Phase 3 shipped
-
-- Hotkey: default right-Option, held-to-record. `HotkeyMonitor` uses a `.listenOnly` `cgSessionEventTap` on `flagsChanged` and isolates right-Option from left via device-specific `NX_DEVICERALTKEYMASK` (0x40) — the generic `.maskAlternate` bit fires for both Option keys and would misfire on mixed holds. The target keyCode + flag mask are read from `AppSettings` (Phase 4) so the hotkey is now user-configurable.
-- Tap filter: holds shorter than 200 ms are discarded as accidental taps.
-- Paste: `PasteService` snapshots the pasteboard, writes the transcription, posts a ⌘V via `.cgAnnotatedSessionEventTap`, then restores the previous clipboard after 150 ms (enough margin on Electron apps).
-- Accessibility: `DictationCoordinator` gates start on `AXIsProcessTrustedWithOptions`. When the user grants AX after launch, `MenuBarController` polls `hasAccessibilityPermission()` for 2 min and arms the tap live — no relaunch needed. Ad-hoc rebuilds still invalidate the grant until Dev ID lands.
-
-## Phase 5a shipped (onboarding + Sparkle wiring)
-
-- **Onboarding** — 4-step SwiftUI flow in `OnboardingView` hosted by `OnboardingWindowController`. Steps: welcome → mic permission (`AVCaptureDevice.requestAccess(for: .audio)`) → accessibility (opens System Settings + polls for grant, auto-advances) → hotkey intro (shows current `settings.hotkeyDisplayName`). Gated by `settings.onboardingCompleted`; MenuBarController presents it on first launch. "Show Onboarding…" item re-opens it any time.
-- **Sparkle 2.9.1** — `UpdaterController.shared` wraps `SPUStandardUpdaterController(startingUpdater: true)`. Instantiated eagerly in MenuBarController so scheduled checks start at launch. Menu item "Check for Updates…" targets the wrapper.
-- **EdDSA keypair** — generated via `build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys`; private key lives in Erik's login keychain. Public key `xLy1zhCVvHlYyI1wHQyPWk67NxoP/u7vvPfMFe8joEY=` is in `project.yml`.
-- **Info.plist** — switched from `GENERATE_INFOPLIST_FILE` to an xcodegen `info:` block so we can set custom keys (`SUFeedURL`, `SUPublicEDKey`, `SUEnableInstallerLauncherService`). `Bark/Info.plist` is now generated on disk by xcodegen and gitignored.
-- **Feed URL** — `https://delarc0.github.io/bark-mac/appcast.xml`. Not yet hosted. `distribution/appcast.xml` is an empty template, `distribution/README.md` has the full release recipe for when Dev ID lands.
-- **Dormant until Dev ID** — Sparkle can fetch the appcast and show UI, but won't apply updates that aren't both EdDSA-signed AND Dev-ID-codesigned. That's fine for now; the plumbing is tested and ready.
-
-## Phase 4 shipped
-
-- **Overlay (two skins)** — `OverlayController` owns two transparent `NSPanel`s (borderless, non-activating, `.statusBar` level, joins all spaces incl. full-screen) and picks one per dictation in `resolveSurface()`, locking the choice on first reveal so a pointer move can't swap them mid-session. The **pill** (`OverlayView`) sits bottom-center of whichever screen holds the pointer; the **notch island** (`IslandView`) fuses a black chin to the built-in display's cutout and is used when `notchIslandEnabled` is on and `NotchGeometry` finds a notch on the pointer's screen (never in clamshell or on externals, where the built-in display is absent). Both are **wordless**, sharing one vocabulary from `Indicators.swift`: red pulsing REC dot + live mic-driven bars while recording, lime spinner while transcribing, spinner + percentage while the model downloads. Reveal is voice-gated (nothing appears until you actually speak).
-- **Settings window** — `SettingsWindowController` / `SettingsView` (SwiftUI `TabView`): General, Hotkey, Audio, Model. Launched from status menu (⌘,).
-- **Hotkey picker** — `HotkeyRecorder` installs a local `NSEvent` monitor while capturing. Posts `HotkeyRecorder.listeningChanged` so `MenuBarController` pauses the global tap during capture (prevents the capture keystroke from triggering dictation on the old mapping). Persists keyCode + device-specific flag mask (NX_DEVICEL/R for each modifier) + a display name to `AppSettings`.
-- **AppSettings** — UserDefaults-backed `ObservableObject` singleton. Persists hotkey (keyCode + mask + display name), model variant, language, input device UID. Posts `AppSettings.didChange` on any mutation; `MenuBarController` listens and restarts the hotkey tap so new mappings take effect immediately.
-- **Input device persistence** — selection is now stored by device UID (stable across reboots/reconnects), not the ephemeral `AudioDeviceID`. `AudioDeviceCatalog.inputID(matching:)` resolves on each start.
-- **Model / language** — selectable in Settings → Model. Takes effect on next launch (Transcriber is init'd once at MenuBarController construction).
-- **Launch-at-login** — shipped 2026-07-17. `SMAppService.mainApp` register/unregister behind `AppSettings.launchAtLogin`; truth lives in `SMAppService.status`, not UserDefaults, and the General tab re-reads it on appear (user can flip it in System Settings → Login Items too). Works on dev-signed builds; Dev ID was never actually required for main-app login items.
-
-## Bench
-
-**M1 16 GB, cpuAndGPU fallback:**
-- Cold start (load + 1s silent warmup): ~38s
-- Transcribe 3s of audio, post-warmup: ~8s
-
-**M5 Pro 48 GB, ANE decoder (measured 2026-04-18):**
-- Eager load: 5.76s
-- Warmup (1s silent): 1.27s
-- Transcribe ~3s of audio: 2.17s
-
-## Key files
-
-- `project.yml` — xcodegen source
-- `Bark/BarkApp.swift` — `@main` + AppDelegate
-- `Bark/MenuBarController.swift` — NSStatusItem, menu, test items, eager load + warmup on init, red-dot recording indicator
-- `Bark/Audio/AudioRecorder.swift` — mic capture + resample
-- `Bark/Transcription/Transcriber.swift` — WhisperKit actor (load, warmup, transcribe)
-- `Bark/Hotkey/HotkeyMonitor.swift` — CGEventTap on flagsChanged, reads keyCode + flag mask from AppSettings, `restart()` picks up changes live
-- `Bark/DictationCoordinator.swift` — hotkey → record → transcribe → paste glue; publishes `State` (idle/recording/transcribing); holds the 200 ms tap filter
-- `Bark/Paste/PasteService.swift` — clipboard snapshot + synthesized ⌘V + 150 ms restore
-- `Bark/Overlay/OverlayController.swift` — floating NSPanel host + show/hide
-- `Bark/Overlay/OverlayView.swift` — SwiftUI pill (breathing dot / spinner)
-- `Bark/Settings/AppSettings.swift` — UserDefaults-backed `ObservableObject`, posts `didChange`
-- `Bark/Settings/SettingsWindow.swift` — shared `NSWindowController` holding the SwiftUI view
-- `Bark/Settings/SettingsView.swift` — `TabView` (General/Hotkey/Audio/Model)
-- `Bark/Settings/HotkeyRecorder.swift` — capture widget; posts `HotkeyRecorder.listeningChanged` to pause global tap during capture
-- `Bark/Onboarding/OnboardingView.swift` — 4-step SwiftUI flow (welcome/mic/ax/hotkey/done)
-- `Bark/Onboarding/OnboardingWindow.swift` — `OnboardingWindowController.shared`, sets `onboardingCompleted` on finish
-- `Bark/Updates/UpdaterController.swift` — `SPUStandardUpdaterController` wrapper; menu target for "Check for Updates…"
-- `scripts/release.sh` — the whole release: preflight → bump → archive → Dev ID export → notarize → staple → verify → Sparkle-sign → appcast → GH Release + gh-pages. `--check` = readiness probe
-- `distribution/ExportOptions.plist` — developer-id export, Team `4D2U237VRC`
-- `distribution/appcast.xml` + `distribution/README.md` — update feed source of truth + release runbook
-- `Bark/Bark.entitlements` — (sandbox disabled during dev)
-- `Bark/Info.plist` — generated by xcodegen (gitignored); holds `SUFeedURL`, `SUPublicEDKey`, all `NS*`/`LS*`/`CF*` keys
-
-## When something breaks
-
-- Transcription hangs silently (M1, M2 Max, possibly others) → ANE is wedged. The launch self-heal should catch this and flip to CPU+GPU automatically; if it didn't, toggle Settings → Model → "Use CPU + GPU only" and relaunch.
-- "AudioObjectRemovePropertyListener: no object" spam → AirPods/BT device hot-swapped mid-stream. Benign but audio stream may need restart.
-- Model download fails → check `~/Documents/huggingface/` permissions; HuggingFace CDN occasionally 403s.
+- No code comments unless genuinely non-obvious (a hidden invariant, a workaround for a specific bug), one line.
+- XcodeGen: `project.yml` is the source of truth; `Bark.xcodeproj` and `App/Info.plist` are generated and gitignored.
+- Language prefill and model routing are two different decisions; never re-merge them. A remembered language prefills the general model, it never routes to KB (KB-Whisper silently translates English into Swedish).
+- **Signing:** `project.yml` compiles ad-hoc (`CODE_SIGN_IDENTITY: "-"`) so a clean checkout builds on any Mac and the SPM targets never demand a development team. The Debug post-build phase deep-re-signs the bundle to unify nested Team IDs and, when `BARK_SIGN_IDENTITY="Bark Dev"` is passed (the optional self-signed cert from `scripts/create-signing-cert.sh`), upgrades to it so TCC grants survive rebuilds. Never pass `CODE_SIGN_IDENTITY` on the xcodebuild CLI: it leaks to the SPM targets and fails the build. Ad-hoc builds reset permissions on each rebuild.
+- **Release:** `scripts/release.sh X.Y.Z [--publish]` is the only release path (preflight, bump, archive, Developer ID export per `distribution/ExportOptions.plist`, notarize, staple, verify, Sparkle-sign, appcast, GitHub Release, gh-pages). It refuses unless on a clean `main` equal to `origin/main`; `--check` probes machine readiness. The appcast item carries `sparkle:minimumSystemVersion` 26.0. Runbook: `distribution/README.md`.
+- Team ID `4D2U237VRC` (LAB37 Media AB). Sparkle feed `https://delarc0.github.io/bark-mac/appcast.xml`; EdDSA public key `xLy1zhCVvHlYyI1wHQyPWk67NxoP/u7vvPfMFe8joEY=` (in `project.yml`; the private key lives in the release machine's login keychain, backup in 1Password).

@@ -35,7 +35,7 @@ Verify readiness any time:
 ## Cutting a release
 
 ```bash
-./scripts/release.sh 0.2.0 --publish
+./scripts/release.sh 1.0.0 --publish
 ```
 
 That does, in order: preflight → bump `MARKETING_VERSION` +
@@ -52,6 +52,11 @@ Applications sidesteps App Translocation, which breaks Sparkle updates for
 apps run from ~/Downloads); the **zip** is what Sparkle pulls for updates
 (the appcast enclosure points at it).
 
+Every run except `--check` first refuses unless the branch is `main`, the tree is
+clean and HEAD equals `origin/main`. Each appcast item carries
+`sparkle:minimumSystemVersion` 26.0, so installs on macOS 14/15 are never offered
+a build that will not launch.
+
 Without `--publish` it stops after local verification and pushes nothing
 (dry run; reset with `git checkout -- project.yml distribution/appcast.xml`).
 
@@ -61,7 +66,7 @@ Without `--publish` it stops after local verification and pushes nothing
   staples the .app and re-zips for distribution.
 - **The mic dies silently** in a hardened-runtime build without the
   `com.apple.security.device.audio-input` entitlement. It's in
-  `Bark/Bark.entitlements`; the verify step fails the release if it's missing.
+  `App/Bark.entitlements`; the verify step fails the release if it's missing.
 - **Never pass `CODE_SIGN_IDENTITY` on the xcodebuild CLI** — it leaks into the
   SPM package targets, which then demand a development team. The archive stays
   ad-hoc; `-exportArchive` re-signs everything with the Developer ID cert per

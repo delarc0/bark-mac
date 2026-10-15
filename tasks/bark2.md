@@ -257,14 +257,14 @@ Each one bit Bark once. Each gets a test or an eval case.
 - P3 hq: API, MCP tools, agent pass, calendar enrichment (after the hq target
   is chosen; verify hq can read each teammate's calendar, not only Erik's).
 - P4 Release as Bark 1.0 over 0.2.3 (Erik's go). Checklist:
-  - appcast item carries sparkle:minimumSystemVersion 26.0, so 0.2.3 installs
+  - [x] appcast item carries sparkle:minimumSystemVersion 26.0, so 0.2.3 installs
     on macOS 14/15 are not offered a build that will not launch;
   - CURRENT_PROJECT_VERSION above 5;
   - settings in the shared UserDefaults domain: hotkey, device UID and
     language migrate, everything else resets (stated in release notes);
-  - models moved from ~/Documents/huggingface to Application Support, not
-    re-downloaded and recompiled;
-  - release only from main with a tag (release.sh gets a branch guard).
+  - old 0.2.x CoreML models in ~/Documents/huggingface (about 6 GB) are offered
+    for removal with one tap; never deleted silently;
+  - [x] release only from main with a tag (release.sh gets a branch guard).
 
 ## What needs Erik
 
