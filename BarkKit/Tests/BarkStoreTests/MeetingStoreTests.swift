@@ -137,7 +137,7 @@ struct MeetingStoreTests {
         }
 
         let store = try MeetingStore(root: root)
-        #expect(store.schemaVersion == 2)
+        #expect(store.schemaVersion == MeetingStore.migrations.count)
         #expect(try store.pendingOutbox() == [
             OutboxItem(meetingID: c, state: .pending, generation: 1, attempts: 2, lastError: "HTTP 503", lastAttemptAt: nil),
             OutboxItem(meetingID: b, state: .pending, generation: 1, attempts: 0, lastError: nil, lastAttemptAt: nil),
@@ -146,7 +146,82 @@ struct MeetingStoreTests {
         #expect(try store.outboxRejected(c, generation: 1, message: "too long"))
         try store.delete(b)
         #expect(try store.outboxItem(b) == nil)
-        #expect(try MeetingStore(root: root).schemaVersion == 2)
+        #expect(try MeetingStore(root: root).schemaVersion == MeetingStore.migrations.count)
+    }
+
+    @Test func upgradesV2AndQueuesFinishedMeetingsForSpeakers() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let path = root.appending(path: "bark.sqlite").path
+        let done = UUID(), expired = UUID(), recording = UUID()
+        do {
+            let v2 = try Database(path: path, migrations: Array(MeetingStore.migrations.prefix(2)))
+            #expect(v2.userVersion == 2)
+            try v2.run("INSERT INTO meetings (id, started_at, language, mode, status) VALUES (?, 0, 'sv', 'call', 'done')", [done.uuidString])
+            try v2.run("INSERT INTO meetings (id, started_at, language, mode, status, audio_deleted_at) VALUES (?, 1, 'sv', 'call', 'done', 5)",
+                       [expired.uuidString])
+            try v2.run("INSERT INTO meetings (id, started_at, language, mode, status) VALUES (?, 2, 'en', 'in_person', 'recording')",
+                       [recording.uuidString])
+            let speaker = try v2.insert("INSERT INTO speakers (meeting_id, label, name) VALUES (?, 'SPEAKER_1', 'Anna')", [done.uuidString])
+            try v2.run("""
+                INSERT INTO segments (meeting_id, stream, start_s, end_s, text, model, language, speaker_id)
+                VALUES (?, 'them', 1, 2, 'Hej', 'kb', 'sv', ?)
+                """, [done.uuidString, speaker])
+            try v2.run("INSERT INTO outbox (meeting_id, state, generation) VALUES (?, 'acknowledged', 3)", [done.uuidString])
+        }
+
+        let store = try MeetingStore(root: root)
+        #expect(store.schemaVersion == 3)
+        #expect(try store.meeting(done)?.diarization == .pending)
+        #expect(try store.meeting(expired)?.diarization == nil)
+        #expect(try store.meeting(recording)?.diarization == nil)
+        #expect(try store.pendingDiarization().map(\.id) == [done])
+        #expect(try store.speakers(done).map(\.name) == ["Anna"])
+        #expect(try store.segments(done).first?.speakerID != nil)
+        #expect(try store.outboxItem(done) == OutboxItem(meetingID: done, state: .acknowledged, generation: 3, attempts: 0,
+                                                         lastError: nil, lastAttemptAt: nil))
+        #expect(try MeetingStore(root: root).schemaVersion == 3)
+    }
+
+    @Test func speakersAreSavedAfterTheMeetingIsDone() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "sv", mode: .call).id
+        #expect(try store.meeting(id)?.diarization == nil)
+        let a = try store.addSegment(Segment(stream: .me, start: 0, end: 2, text: "Hej", model: "kb", language: "sv"), to: id)
+        let b = try store.addSegment(Segment(stream: .them, start: 2, end: 5, text: "Hallå", model: "kb", language: "sv"), to: id)
+        let c = try store.addSegment(Segment(stream: .them, start: 5, end: 6, text: " ", model: "kb", language: "sv"), to: id)
+        try store.finish(id, endedAt: .now)
+        #expect(try store.meeting(id)?.status == .done && store.meeting(id)?.diarization == .pending)
+        #expect(try store.pendingDiarization().map(\.id) == [id])
+        try store.outboxAcknowledged(id, generation: 1)
+
+        try store.setDiarization(id, .running)
+        #expect(try store.pendingDiarization().isEmpty)
+        try store.saveSpeakers(id, labels: ["Me", "Speaker 1"], assignments: [a: 0, b: 1])
+        let speakers = try store.speakers(id)
+        #expect(speakers.map(\.label) == ["Me", "Speaker 1"] && speakers.allSatisfy { $0.name == nil })
+        #expect(try store.segments(id).map(\.speakerID) == [speakers[0].id, speakers[1].id, nil])
+        #expect(try store.meeting(id)?.diarization == .done)
+        #expect(try store.outboxItem(id)?.state == .pending && store.outboxItem(id)?.generation == 2)
+
+        // Saving again replaces the speakers; no segment keeps a stale one.
+        try store.saveSpeakers(id, labels: ["Speaker 1"], assignments: [c: 0])
+        #expect(try store.speakers(id).map(\.label) == ["Speaker 1"])
+        #expect(try store.segments(id).map { $0.speakerID != nil } == [false, false, true])
+    }
+
+    @Test func aDiarizationCutShortIsNotRetried() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MeetingStore(root: root)
+        let crashed = try store.createMeeting(language: "sv", mode: .call).id
+        let waiting = try store.createMeeting(language: "sv", mode: .inPerson).id
+        try store.finish(crashed, endedAt: .now)
+        try store.finish(waiting, endedAt: .now)
+        try store.setDiarization(crashed, .running)
+        #expect(try store.failInterruptedDiarization() == 1)
+        #expect(try store.meeting(crashed)?.diarization == .failed)
+        #expect(try store.pendingDiarization().map(\.id) == [waiting])
     }
 
     @Test func pcmAppendsSurviveAnUnclosedWriter() throws {

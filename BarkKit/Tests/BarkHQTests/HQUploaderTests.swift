@@ -83,6 +83,42 @@ struct HQUploaderTests {
         #expect(server.requests.count == 2)
     }
 
+    @Test func speakersFoundAfterTheUploadAreSentAgain() async throws {
+        let test = TestSettings(), server = StubServer()
+        defer { test.cleanUp(); try? FileManager.default.removeItem(at: root) }
+        try connected(server, test)
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "sv", mode: .call).id
+        let mine = try store.addSegment(Segment(stream: .me, start: 0, end: 2, text: "Hej", model: "kb", language: "sv"), to: id)
+        let theirs = try store.addSegment(Segment(stream: .them, start: 2, end: 5, text: "Hallå", model: "kb", language: "sv"), to: id)
+        try store.finish(id, endedAt: .now)
+        server.respond(status: 201)
+        let uploader = HQUploader(store: store, settings: test.settings, appVersion: "1", session: server.session)
+        #expect(await uploader.drain().acknowledged == [id])
+
+        func sent() throws -> (speakers: [[String: String?]], segments: [String?]) {
+            let data = try #require(server.requests.last?.body)
+            let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let speakers = (body["speakers"] as? [[String: Any]] ?? []).map { $0.mapValues { $0 as? String } }
+            let segments = (body["segments"] as? [[String: Any]] ?? []).map { $0["speaker"] as? String }
+            return (speakers, segments)
+        }
+        #expect(try sent().speakers.isEmpty && sent().segments == [nil, nil])
+
+        try store.saveSpeakers(id, labels: ["Me", "Speaker 1"], assignments: [mine: 0, theirs: 1])
+        #expect(await uploader.drain().acknowledged == [id])
+        #expect(try sent().speakers == [["label": "Me", "name": nil], ["label": "Speaker 1", "name": nil]])
+        #expect(try sent().segments == ["Me", "Speaker 1"])
+
+        let anna = try #require(try store.speakers(id).last)
+        try store.nameSpeaker(anna.id, "Anna")
+        try store.enqueue(id)
+        #expect(await uploader.drain().acknowledged == [id])
+        #expect(try sent().speakers == [["label": "Me", "name": nil], ["label": "Speaker 1", "name": "Anna"]])
+        #expect(try sent().segments == ["Me", "Speaker 1"])
+        #expect(server.requests.count == 3)
+    }
+
     @Test func queuedAgainDuringTheUploadIsSentAgain() async throws {
         let test = TestSettings(), server = StubServer()
         defer { test.cleanUp(); try? FileManager.default.removeItem(at: root) }

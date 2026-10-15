@@ -70,7 +70,9 @@ Content-Type: application/json
 
 Idempotent: pushing the same id again replaces the whole meeting
 (transcript, speakers, notes, gaps, title). Bark may push a meeting again
-after it changed on the Mac, for example a rename or edited notes. The `{meeting id}`
+after it changed on the Mac, for example a rename, edited notes, or its
+speakers found (a pass after the meeting is done, so the first push usually
+has none) or named. The `{meeting id}`
 in the path equals `meeting.id` in the body; hq answers `422` if not.
 
 Body:
@@ -89,7 +91,7 @@ Body:
 | `segments[].text` | string | What was said. |
 | `segments[].speaker` | string or null | A `speakers[].label` of this meeting, or null when not known. |
 | `speakers[]` | array | The meeting's speakers. |
-| `speakers[].label` | string | Unique within the meeting, e.g. `SPEAKER_1`. |
+| `speakers[].label` | string | Unique within the meeting, e.g. `SPEAKER_1`. Bark sends `Me` for the user on a call's `me` stream and `Speaker 1`, `Speaker 2`, ... in order of first appearance for everyone else. |
 | `speakers[].name` | string or null | The name the user gave, or null. |
 | `notes` | string or null | The user's own notes, plain text. hq keeps them apart from anything its agent writes and never writes agent output into them. A re-push replaces them. |
 | `gaps[]` | array | Where audio is missing or untranscribed. |

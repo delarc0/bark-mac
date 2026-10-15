@@ -37,6 +37,8 @@ final class MeetingsModel {
 
     struct Detail: Equatable {
         var items: [Item] = []
+        var speakers: [Int64: Speaker] = [:]
+        var findingSpeakers = false
         var notes: String?
         /// hq's reason for refusing the meeting, when it did.
         var rejected: String?
@@ -79,7 +81,10 @@ final class MeetingsModel {
         let items = (segments.map(Item.segment) + gaps.map(Item.gap)).sorted { $0.start < $1.start }
         let notes = (try? store.notes(id))?.body.trimmingCharacters(in: .whitespacesAndNewlines)
         let outbox = try? store.outboxItem(id)
-        let next = Detail(items: items, notes: notes?.isEmpty == false ? notes : nil,
+        let speakers = Dictionary(uniqueKeysWithValues: ((try? store.speakers(id)) ?? []).map { ($0.id, $0) })
+        let diarization = (try? store.meeting(id))?.diarization
+        let next = Detail(items: items, speakers: speakers, findingSpeakers: diarization == .pending || diarization == .running,
+                          notes: notes?.isEmpty == false ? notes : nil,
                           rejected: outbox?.state == .rejected ? (outbox?.lastError ?? "No reason given.") : nil)
         if next != detail { detail = next }
     }
@@ -97,7 +102,7 @@ final class MeetingsModel {
     func copyTranscript() {
         let lines = detail.items.compactMap { item -> TranscriptText.Line? in
             guard case .segment(let segment) = item else { return nil }
-            return TranscriptText.Line(label: segment.stream.label, start: segment.start, text: segment.text)
+            return TranscriptText.Line(label: speaker(of: segment)?.displayName ?? segment.stream.label, start: segment.start, text: segment.text)
         }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(TranscriptText.plain(lines), forType: .string)
@@ -117,6 +122,28 @@ final class MeetingsModel {
             log.error("Rename failed: \(String(describing: error), privacy: .public)")
         }
         reload()
+    }
+
+    /// The speaker a them or room line is attributed to; Me lines are the stream's own.
+    func speaker(of segment: Segment) -> Speaker? {
+        guard segment.stream != .me else { return nil }
+        return segment.speakerID.flatMap { detail.speakers[$0] }
+    }
+
+    /// An empty name puts the speaker's label back. A finished meeting is sent to hq again.
+    func name(_ speaker: Speaker, _ name: String) {
+        guard let store = library.store, let meeting = selected else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try store.nameSpeaker(speaker.id, trimmed.isEmpty ? nil : trimmed)
+            if meeting.status == .done {
+                try store.enqueue(meeting.id)
+                library.hq.sync()
+            }
+        } catch {
+            log.error("Naming a speaker failed: \(String(describing: error), privacy: .public)")
+        }
+        reloadDetail()
     }
 
     func delete() {
@@ -152,6 +179,10 @@ extension MeetingStream {
         case .room: nil
         }
     }
+}
+
+extension Speaker {
+    var displayName: String { name ?? label }
 }
 
 extension MeetingStatus {
@@ -285,6 +316,11 @@ private struct MeetingDetail: View {
                                 .padding(4)
                         }
                     }
+                    if model.detail.findingSpeakers && !model.detail.items.isEmpty {
+                        Text("Finding who said what…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     transcript
                     Color.clear.frame(height: 1).id("end")
                 }
@@ -368,7 +404,7 @@ private struct MeetingDetail: View {
         } else {
             LazyVStack(alignment: .leading, spacing: 10) {
                 ForEach(model.detail.items) { item in
-                    TranscriptRow(item: item)
+                    TranscriptRow(model: model, item: item)
                 }
             }
         }
@@ -376,6 +412,7 @@ private struct MeetingDetail: View {
 }
 
 private struct TranscriptRow: View {
+    let model: MeetingsModel
     let item: MeetingsModel.Item
 
     var body: some View {
@@ -386,11 +423,13 @@ private struct TranscriptRow: View {
                 .frame(width: 56, alignment: .trailing)
             switch item {
             case .segment(let segment):
-                if let label = segment.stream.label {
+                if let speaker = model.speaker(of: segment) {
+                    SpeakerLabel(model: model, speaker: speaker)
+                } else if let label = segment.stream.label {
                     Text(label)
                         .fontWeight(.semibold)
                         .foregroundStyle(segment.stream == .me ? .primary : .secondary)
-                        .frame(width: 40, alignment: .leading)
+                        .frame(width: SpeakerLabel.width, alignment: .leading)
                 }
                 Text(segment.text.trimmingCharacters(in: .whitespaces))
                     .textSelection(.enabled)
@@ -400,6 +439,41 @@ private struct TranscriptRow: View {
                     .italic()
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+/// A speaker's name, or its label until it has one. One click opens a name field.
+private struct SpeakerLabel: View {
+    static let width: CGFloat = 96
+    let model: MeetingsModel
+    let speaker: Speaker
+    @State private var naming = false
+    @State private var draft = ""
+
+    var body: some View {
+        Button {
+            draft = speaker.name ?? ""
+            naming = true
+        } label: {
+            Text(speaker.displayName)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .buttonStyle(.plain)
+        .help("Name this speaker")
+        .frame(width: Self.width, alignment: .leading)
+        .popover(isPresented: $naming, arrowEdge: .bottom) {
+            TextField(speaker.label, text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 200)
+                .padding(12)
+                .onSubmit {
+                    model.name(speaker, draft)
+                    naming = false
+                }
         }
     }
 }

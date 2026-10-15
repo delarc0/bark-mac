@@ -31,8 +31,12 @@ targets:
       - path: App
         excludes:
           - Resources/silero-vad
-      # A folder reference: the compiled model is copied as is, never recompiled.
+          - Resources/speaker-diarization
+      # Folder references: the compiled models are copied as is, never recompiled.
       - path: App/Resources/silero-vad
+        type: folder
+        buildPhase: resources
+      - path: App/Resources/speaker-diarization
         type: folder
         buildPhase: resources
     dependencies:

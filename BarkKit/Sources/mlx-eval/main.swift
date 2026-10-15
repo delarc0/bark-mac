@@ -12,12 +12,15 @@ import MLX
 // --language auto (pipeline only) routes each clip through detection; --model auto|auto8 loads
 // large-v3 plus KB at fp16 or 8-bit. Models come from ModelStore (BarkKit/scripts/dev-models.sh).
 // --meeting runs the S7 meeting budget (MeetingBudget.swift).
+// --diarize runs every .wav through MeetingDiarizer with the app's bundled models, one RTTM per
+// clip (S5; score with pyannote.metrics against reference RTTMs).
 
 let usage = """
     usage: mlx-eval --model swedish|swedish8|general|general8 --language <code> --clips <dir> --out <file.jsonl>
            mlx-eval --pipeline [--realtime 1] --model <as above> --language <code> ...
            mlx-eval --pipeline [--realtime 1] --model auto|auto8 --language auto ...
            mlx-eval --meeting [--speed 10] [--minutes 90] [--sample 60] --out <file.jsonl>
+           mlx-eval --diarize --clips <dir> --rttm <dir> --out <file.jsonl>
     """
 
 func fail(_ message: String) -> Never {
@@ -29,7 +32,7 @@ var args: [String: String] = [:]
 var argv = CommandLine.arguments.dropFirst()
 while let flag = argv.popFirst() {
     guard flag.hasPrefix("--") else { fail(usage) }
-    if flag == "--pipeline" || flag == "--meeting" {
+    if flag == "--pipeline" || flag == "--meeting" || flag == "--diarize" {
         args[String(flag.dropFirst(2))] = "1"
         continue
     }
@@ -49,6 +52,32 @@ if args["meeting"] == "1" {
     try await MeetingBudget.run(speed: speed, minutes: minutes, sampleEvery: sample, sets: evalDir.appending(path: "sets"),
                                 storeRoot: evalDir.appending(path: "meeting/store"), out: out, models: ModelStore(),
                                 silero: sileroFolder) { FileHandle.standardError.write(Data("[mlx-eval] \($0)\n".utf8)) }
+    try out.close()
+    exit(0)
+}
+if args["diarize"] == "1" {
+    guard let clipsDir = args["clips"], let rttmDir = args["rttm"], let outPath = args["out"] else { fail(usage) }
+    let models = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../App/Resources/speaker-diarization")
+    guard MeetingDiarizer.modelsPresent(in: models) else { fail("no diarization models in \(models.path)") }
+    let diarizer = MeetingDiarizer(models: models)
+    try FileManager.default.createDirectory(atPath: rttmDir, withIntermediateDirectories: true)
+    FileManager.default.createFile(atPath: outPath, contents: nil)
+    let out = try FileHandle(forWritingTo: URL(fileURLWithPath: outPath))
+    let clips = try FileManager.default.contentsOfDirectory(atPath: clipsDir).filter { $0.hasSuffix(".wav") }.sorted()
+    for clip in clips {
+        let url = URL(fileURLWithPath: clipsDir).appending(path: clip)
+        let id = String(clip.dropLast(4))
+        let file = try AVAudioFile(forReading: url)
+        let clock = ContinuousClock(), start = clock.now
+        let turns = try await diarizer.turns(url)
+        let seconds = (clock.now - start) / .seconds(1)
+        let rttm = turns.map { "SPEAKER \(id) 1 \(String(format: "%.3f %.3f", $0.start, $0.end - $0.start)) <NA> <NA> S\($0.speaker) <NA> <NA>\n" }
+        try rttm.joined().write(toFile: "\(rttmDir)/\(id).rttm", atomically: true, encoding: .utf8)
+        let line: [String: Any] = ["id": id, "audio_s": Double(file.length) / file.fileFormat.sampleRate, "seconds": seconds,
+                                   "speakers": Set(turns.map(\.speaker)).count]
+        out.write(try JSONSerialization.data(withJSONObject: line, options: [.sortedKeys]) + Data("\n".utf8))
+        FileHandle.standardError.write(Data("[mlx-eval] \(id): \(Set(turns.map(\.speaker)).count) speakers, \(String(format: "%.1f", seconds)) s\n".utf8))
+    }
     try out.close()
     exit(0)
 }
