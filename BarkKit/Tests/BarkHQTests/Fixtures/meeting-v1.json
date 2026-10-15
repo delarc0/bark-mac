@@ -1,0 +1,24 @@
+{
+  "meeting": {
+    "id": "3f2b6c1e-8a4d-4f7e-9b1a-2c5d6e7f8a90",
+    "started_at": "2026-10-15T09:00:00Z",
+    "ended_at": "2026-10-15T09:42:10Z",
+    "title": "Weekly sync",
+    "language": "sv",
+    "mode": "call"
+  },
+  "segments": [
+    { "stream": "me", "start_s": 0.84, "end_s": 4.2, "text": "Hej, hör ni mig?", "speaker": null },
+    { "stream": "them", "start_s": 3.9, "end_s": 8.25, "text": "Ja, vi hör dig bra.", "speaker": "SPEAKER_1" },
+    { "stream": "them", "start_s": 9.1, "end_s": 12.6, "text": "Ska vi börja med budgeten?", "speaker": "SPEAKER_1" }
+  ],
+  "speakers": [
+    { "label": "SPEAKER_1", "name": "Anna" },
+    { "label": "SPEAKER_2", "name": null }
+  ],
+  "notes": "Budget: fråga om Q4.\nSkicka offert på fredag.",
+  "gaps": [
+    { "at_s": 1520.5, "reason": "sleep" }
+  ],
+  "app_version": "1.0.0 (42)"
+}

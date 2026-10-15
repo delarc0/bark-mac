@@ -69,6 +69,10 @@ targets:
         SUFeedURL: $(BARK_FEED_URL)
         SUPublicEDKey: "xLy1zhCVvHlYyI1wHQyPWk67NxoP/u7vvPfMFe8joEY="
         SUEnableInstallerLauncherService: NO
+        # bark://hq-connected is hq's pairing callback (tasks/bark-hq-api.md).
+        CFBundleURLTypes:
+          - CFBundleURLName: se.lab37.bark.hq
+            CFBundleURLSchemes: [bark]
     settings:
       base:
         PRODUCT_MODULE_NAME: Bark
