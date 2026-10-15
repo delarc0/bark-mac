@@ -160,9 +160,17 @@ public final class SystemAudioTap {
               let resampler = MonoResampler(inputRate: format.sampleRate, channels: Int(format.channelCount)) else {
             throw TapError.format
         }
-        log.info("Tap \(format.sampleRate, privacy: .public) Hz, \(format.channelCount, privacy: .public) ch")
+        // An output device with inputs of its own (an audio interface) puts those buffers ahead of
+        // the tap's in the IOProc's input list.
+        let layout = Self.inputBufferChannels(aggregate)
+        guard let buffers = TapBuffers.range(bufferChannels: layout, tapChannels: Int(format.channelCount)) else {
+            log.error("Tap input layout \(layout, privacy: .public) has no \(format.channelCount, privacy: .public) ch tap stream at its end")
+            throw TapError.format
+        }
+        log.info("Tap \(format.sampleRate, privacy: .public) Hz, \(format.channelCount, privacy: .public) ch, buffers \(buffers, privacy: .public) of \(layout, privacy: .public)")
         var proc: AudioDeviceIOProcID?
-        status = AudioDeviceCreateIOProcIDWithBlock(&proc, aggregate, queue, Self.ioBlock(format, resampler, meter))
+        status = AudioDeviceCreateIOProcIDWithBlock(&proc, aggregate, queue,
+                                                    Self.ioBlock(format, TapBuffers(range: buffers, of: layout.count), resampler, meter))
         guard status == noErr, let proc else { throw TapError.start(status) }
         procID = proc
         status = AudioDeviceStart(aggregate, proc)
@@ -172,12 +180,27 @@ public final class SystemAudioTap {
 
     // Built outside the main actor: a closure formed in an isolated context would assert that
     // isolation on the IO thread.
-    nonisolated private static func ioBlock(_ format: AVAudioFormat, _ resampler: MonoResampler, _ meter: Meter) -> AudioDeviceIOBlock {
+    nonisolated private static func ioBlock(_ format: AVAudioFormat, _ tap: TapBuffers, _ resampler: MonoResampler,
+                                            _ meter: Meter) -> AudioDeviceIOBlock {
         { _, input, _, _, _ in
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: input, deallocator: nil),
+            guard let list = tap.select(from: input),
+                  let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: list, deallocator: nil),
                   case .samples(let samples, let peak) = resampler.process(buffer) else { return }
             meter.deliver(samples, peak: peak)
         }
+    }
+
+    /// Channels per input buffer of a device, in IOProc order.
+    private static func inputBufferChannels(_ device: AudioObjectID) -> [Int] {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
+                                                 mScope: kAudioObjectPropertyScopeInput,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0 else { return [] }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw) == noErr else { return [] }
+        return UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self)).map { Int($0.mNumberChannels) }
     }
 
     private func listen(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> Listener {
@@ -263,5 +286,43 @@ public final class SystemAudioTap {
         guard AudioInputs.property(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice,
                                    into: &device), device != kAudioObjectUnknown else { return nil }
         return AudioInputs.string(device, kAudioDevicePropertyDeviceUID)
+    }
+}
+
+/// Where the tap sits in the aggregate device's input buffers: after every input stream of the
+/// sub-device, so it is the run of buffers at the end whose channels add up to the tap's. Holds a
+/// list of just those buffers, refilled on the IO thread each cycle without allocating.
+final class TapBuffers: @unchecked Sendable {
+    let range: Range<Int>
+    private let total: Int
+    private let list: UnsafeMutableAudioBufferListPointer
+
+    init(range: Range<Int>, of total: Int) {
+        self.range = range
+        self.total = total
+        list = AudioBufferList.allocate(maximumBuffers: range.count)
+    }
+
+    deinit { free(list.unsafeMutablePointer) }
+
+    /// nil when no run of buffers at the end adds up to the tap's channels.
+    static func range(bufferChannels: [Int], tapChannels: Int) -> Range<Int>? {
+        guard tapChannels > 0 else { return nil }
+        var start = bufferChannels.count
+        var channels = 0
+        while channels < tapChannels, start > 0 {
+            start -= 1
+            channels += bufferChannels[start]
+        }
+        return channels == tapChannels ? start ..< bufferChannels.count : nil
+    }
+
+    /// The tap's buffers out of the IOProc's input list, valid until the next call. nil when the
+    /// list no longer has the layout the device was built with (a route change rebuilds it).
+    func select(from input: UnsafePointer<AudioBufferList>) -> UnsafePointer<AudioBufferList>? {
+        let all = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+        guard all.count == total else { return nil }
+        for (i, index) in range.enumerated() { list[i] = all[index] }
+        return UnsafePointer(list.unsafeMutablePointer)
     }
 }
