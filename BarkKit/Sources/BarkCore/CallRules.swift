@@ -203,15 +203,60 @@ public enum CallApps {
         known.first { $0.owns(bundleID) }
     }
 
-    /// A call is likely when a known call app or a browser is running audio input (Google Meet
-    /// runs in a browser). Returns that app, a call app ahead of a browser.
-    public static func likelyCall(_ processes: [AudioProcess]) -> CallApp? {
+    /// A known app with input wins; otherwise an eligible app needs input and output under one root.
+    public static func likelyCall(_ processes: [AudioProcess], appName: (Int32) -> String? = { _ in nil }) -> CallApp? {
         let live = Set(processes.filter(\.runningInput).compactMap(\.app))
-        return known.first { live.contains($0) }
+        if let app = known.first(where: { live.contains($0) }) { return app }
+        return unknownCall(processes, appName: appName)
     }
 
     /// Every process of `app`, helpers included: the set a per-app tap is built from.
     public static func processes(of app: CallApp, in processes: [AudioProcess]) -> [AudioProcess] {
         processes.filter { app.owns($0.bundleID) }
+    }
+
+    private static let excludedBundleRoots = [
+        "se.lab37.bark",
+        "com.apple",
+        "com.superduper.superwhisper",
+        "com.electron.wispr-flow",
+        "com.goodsnooze.MacWhisper",
+        "com.ableton.live",
+        "com.blackmagic-design.DaVinciResolve",
+        "com.obsproject.obs-studio",
+        "com.rogueamoeba.audiohijack",
+        "com.rogueamoeba.Loopback",
+    ]
+
+    private static func unknownCall(_ processes: [AudioProcess], appName: (Int32) -> String?) -> CallApp? {
+        let inputs = processes.filter { $0.runningInput && isEligibleUnknown($0.bundleID) }
+        let outputs = processes.filter { $0.runningOutput && isEligibleUnknown($0.bundleID) }
+        for input in inputs {
+            for output in outputs {
+                guard let root = bundleRoot(input.bundleID, output.bundleID) else { continue }
+                let name = appName(input.pid).flatMap { $0.isEmpty ? nil : $0 }
+                    ?? root.split(separator: ".").last.map(String.init) ?? root
+                return CallApp(name: name, bundleIDs: [root])
+            }
+        }
+        return nil
+    }
+
+    private static func isEligibleUnknown(_ bundleID: String?) -> Bool {
+        guard let bundleID, !bundleID.isEmpty, app(bundleID: bundleID) == nil else { return false }
+        return !excludedBundleRoots.contains { isUnder(bundleID, root: $0) }
+    }
+
+    private static func bundleRoot(_ first: String?, _ second: String?) -> String? {
+        guard let first, let second else { return nil }
+        let a = first.lowercased(), b = second.lowercased()
+        if a == b || b.hasPrefix(a + ".") { return first }
+        if a.hasPrefix(b + ".") { return second }
+        return nil
+    }
+
+    private static func isUnder(_ bundleID: String, root: String) -> Bool {
+        let id = bundleID.lowercased(), root = root.lowercased()
+        return id == root || id.hasPrefix(root + ".")
     }
 }

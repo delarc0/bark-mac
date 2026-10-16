@@ -30,7 +30,7 @@ final class CallWatcher {
     }
 
     private func poll() {
-        let change = offers.observe(AudioApps.running())
+        let change = offers.observe(AudioApps.running(), appName: AudioApps.localizedName(forPID:))
         if change != .none { onChange?(change) }
     }
 }

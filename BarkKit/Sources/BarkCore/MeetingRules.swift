@@ -30,8 +30,9 @@ public enum MeetingCapturePlan: Sendable, Equatable {
     /// The mic alone.
     case microphone
 
-    public static func plan(_ choice: MeetingModeChoice, processes: [AudioProcess]) -> MeetingCapturePlan {
-        let call = CallApps.likelyCall(processes).map { app in
+    public static func plan(_ choice: MeetingModeChoice, processes: [AudioProcess],
+                            appName: (Int32) -> String? = { _ in nil }) -> MeetingCapturePlan {
+        let call = CallApps.likelyCall(processes, appName: appName).map { app in
             MeetingCapturePlan.app(app, pids: CallApps.processes(of: app, in: processes).map(\.pid))
         }
         switch choice {
@@ -42,8 +43,7 @@ public enum MeetingCapturePlan: Sendable, Equatable {
     }
 }
 
-/// Detect and offer: a call is offered once, identified by the pids holding audio input in its app,
-/// and not again until it ends. Never records; it only says when to show or withdraw the offer.
+/// Offers known calls at once and unknown calls after two polls, once per input pid set until withdrawal.
 public struct CallOffers: Sendable {
     public enum Change: Sendable, Equatable {
         case offer(CallApp)
@@ -53,11 +53,16 @@ public struct CallOffers: Sendable {
     }
 
     private var current: Set<Int32> = []
+    private var pendingUnknown: String?
 
     public init() {}
 
-    public mutating func observe(_ processes: [AudioProcess]) -> Change {
-        guard let app = CallApps.likelyCall(processes) else {
+    public mutating func observe(_ processes: [AudioProcess], appName: (Int32) -> String? = { _ in nil }) -> Change {
+        let found = CallApps.likelyCall(processes, appName: appName)
+        let unknown = Self.unknownRoot(found)
+        let confirmed = unknown != nil && unknown == pendingUnknown
+        pendingUnknown = unknown
+        guard let app = found, unknown == nil || confirmed else {
             defer { current = [] }
             return current.isEmpty ? .none : .withdraw
         }
@@ -69,11 +74,18 @@ public struct CallOffers: Sendable {
 
     /// A call recorded without an offer (started from the menu) must not be offered once it stops.
     public mutating func markHandled(_ processes: [AudioProcess]) {
-        current = CallApps.likelyCall(processes).map { Self.inputPids(of: $0, in: processes) } ?? []
+        let app = CallApps.likelyCall(processes)
+        current = app.map { Self.inputPids(of: $0, in: processes) } ?? []
+        pendingUnknown = Self.unknownRoot(app)
     }
 
     private static func inputPids(of app: CallApp, in processes: [AudioProcess]) -> Set<Int32> {
         Set(processes.filter { $0.runningInput && app.owns($0.bundleID) }.map(\.pid))
+    }
+
+    private static func unknownRoot(_ app: CallApp?) -> String? {
+        guard let app, app.bundleIDs.count == 1, CallApps.app(bundleID: app.bundleIDs[0]) == nil else { return nil }
+        return app.bundleIDs[0].lowercased()
     }
 }
 
