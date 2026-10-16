@@ -156,3 +156,78 @@ struct NoteMarkupCheckboxTests {
         #expect(NoteMarkup.checkboxCompletion(in: "[]", selection: NSRange(location: 0, length: 2)) == nil)
     }
 }
+
+struct NoteMarkupBackspaceTests {
+    @Test func backspaceRemovesAListMarkerButKeepsTheIndent() {
+        let text = "  - item"
+        let edit = NoteMarkup.backspaceEdit(in: text, selection: NSRange(location: 4, length: 0))
+
+        #expect(edit?.apply(to: text) == "  item")
+        #expect(edit?.selection == NSRange(location: 2, length: 0))
+    }
+
+    @Test func backspaceRemovesDirectAndNestedCheckboxMarkers() {
+        let direct = NoteMarkup.backspaceEdit(in: "[ ] task", selection: NSRange(location: 4, length: 0))
+        #expect(direct?.apply(to: "[ ] task") == "task")
+        #expect(direct?.selection.location == 0)
+
+        let text = "  - [x] done"
+        let nested = NoteMarkup.backspaceEdit(in: text, selection: NSRange(location: 8, length: 0))
+        #expect(nested?.apply(to: text) == "  done")
+        #expect(nested?.selection.location == 2)
+    }
+
+    @Test func backspaceRemovesHeadingMarkers() {
+        let first = NoteMarkup.backspaceEdit(in: "# Title", selection: NSRange(location: 2, length: 0))
+        #expect(first?.apply(to: "# Title") == "Title")
+        #expect(first?.selection.location == 0)
+
+        let second = NoteMarkup.backspaceEdit(in: "## Sub", selection: NSRange(location: 3, length: 0))
+        #expect(second?.apply(to: "## Sub") == "Sub")
+    }
+
+    @Test func backspaceOnlyHandlesTheCaretAtContentStart() {
+        #expect(NoteMarkup.backspaceEdit(in: "- item", selection: NSRange(location: 3, length: 0)) == nil)
+        #expect(NoteMarkup.backspaceEdit(in: "plain", selection: NSRange(location: 0, length: 0)) == nil)
+        #expect(NoteMarkup.backspaceEdit(in: "- item", selection: NSRange(location: 0, length: 2)) == nil)
+
+        let empty = NoteMarkup.backspaceEdit(in: "- ", selection: NSRange(location: 2, length: 0))
+        #expect(empty?.apply(to: "- ") == "")
+    }
+}
+
+struct NoteMarkupSelectionTests {
+    @Test func arrowsAndShiftSelectionStepOverMarkersAcrossThreeLines() {
+        let text = "# Head\n- one\n  - [ ] two"
+        let lines = NoteMarkup.lines(in: text)
+        let secondStart = lines[1].range.location
+        let secondContent = lines[1].contentRange.location
+        let thirdContent = lines[2].contentRange.location
+
+        let right = NoteMarkup.selectionAfterMoving(in: text, selection: NSRange(location: secondStart, length: 0),
+                                                    direction: .right, extending: false)
+        #expect(right == NSRange(location: secondContent, length: 0))
+
+        let left = NoteMarkup.selectionAfterMoving(in: text, selection: NSRange(location: thirdContent, length: 0),
+                                                   direction: .left, extending: false)
+        #expect(left == NSRange(location: lines[1].range.upperBound, length: 0))
+
+        let insideMarker = NoteMarkup.selectionAfterMoving(in: text, selection: NSRange(location: secondStart + 1, length: 0),
+                                                           direction: .right, extending: false)
+        #expect(insideMarker == NSRange(location: secondContent, length: 0))
+
+        let extendRight = NoteMarkup.selectionAfterMoving(in: text, selection: NSRange(location: secondStart, length: 0),
+                                                          direction: .right, extending: true)
+        #expect(extendRight == NSRange(location: secondStart, length: secondContent - secondStart))
+
+        let extendLeft = NoteMarkup.selectionAfterMoving(in: text, selection: NSRange(location: thirdContent, length: 0),
+                                                         direction: .left, extending: true)
+        #expect(extendLeft == NSRange(location: lines[1].range.upperBound,
+                                      length: thirdContent - lines[1].range.upperBound))
+    }
+
+    @Test func ordinaryBodyMovementUsesTheTextViewDefault() {
+        #expect(NoteMarkup.selectionAfterMoving(in: "one\n two", selection: NSRange(location: 2, length: 0),
+                                                direction: .left, extending: false) == nil)
+    }
+}

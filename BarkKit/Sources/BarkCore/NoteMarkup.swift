@@ -8,6 +8,10 @@ public enum NoteMarkup {
         case checkbox(checked: Bool)
     }
 
+    public enum SelectionDirection: Equatable, Sendable {
+        case left, right
+    }
+
     public struct Line: Equatable, Sendable {
         public let range: NSRange
         public let paragraphRange: NSRange
@@ -142,6 +146,45 @@ public enum NoteMarkup {
         guard remaining.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         let change = Change(range: NSRange(location: selection.location - 2, length: 2), replacement: "[ ] ")
         return Edit(changes: [change], selection: NSRange(location: selection.location + 2, length: 0))
+    }
+
+    public static func backspaceEdit(in text: String, selection: NSRange) -> Edit? {
+        guard selection.length == 0, let line = line(in: text, at: selection.location),
+              let marker = line.markerRange, selection.location == line.contentRange.location else { return nil }
+        return Edit(changes: [Change(range: marker, replacement: "")],
+                    selection: NSRange(location: marker.location, length: 0))
+    }
+
+    public static func selectionAfterMoving(in text: String, selection: NSRange,
+                                            direction: SelectionDirection, extending: Bool) -> NSRange? {
+        guard selection.location >= 0, selection.upperBound <= (text as NSString).length else { return nil }
+        let active = direction == .left ? selection.location : selection.upperBound
+        let allLines = lines(in: text)
+        guard let index = allLines.firstIndex(where: { active >= $0.range.location && active <= $0.range.upperBound }),
+              allLines[index].markerRange != nil else { return nil }
+        let line = allLines[index]
+        let contentStart = line.contentRange.location
+        let target: Int?
+        switch direction {
+        case .right:
+            target = active >= line.range.location && active < contentStart ? contentStart : nil
+        case .left:
+            if active == contentStart {
+                target = index > 0 ? allLines[index - 1].range.upperBound : line.range.location
+            } else {
+                target = active > line.range.location && active < contentStart ? line.range.location : nil
+            }
+        }
+        guard let target else { return nil }
+        guard extending else { return NSRange(location: target, length: 0) }
+        switch direction {
+        case .right:
+            guard target >= selection.location else { return nil }
+            return NSRange(location: selection.location, length: target - selection.location)
+        case .left:
+            guard target <= selection.upperBound else { return nil }
+            return NSRange(location: target, length: selection.upperBound - target)
+        }
     }
 
     private static func line(in text: String, at location: Int) -> Line? {
