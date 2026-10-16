@@ -21,6 +21,9 @@ import MLX
 // 8-bit as Swedish and runs the splitting speaker pass on copies of that transcribed meeting
 // store in a loop for the whole run, so dictation latency is measured against it; --gap waits
 // that many seconds between dictations, as a person would.
+// --cache-limit-mb <n> caps MLX's buffer cache at n MB (0 = MLX default, unlimited). Transcriber
+// modes (--pipeline, --meeting) re-pin it to Transcriber.mlxCacheLimit in start(); the flag only
+// holds for engine-only runs.
 
 let usage = """
     usage: mlx-eval --model swedish|swedish8|general|general8 --language <code> --clips <dir> --out <file.jsonl>
@@ -30,6 +33,7 @@ let usage = """
            mlx-eval --meeting [--speed 10] [--minutes 90] [--sample 60] --out <file.jsonl>
            mlx-eval --diarize --clips <dir> --rttm <dir> --out <file.jsonl>
            mlx-eval --split-eval --wav <file> --mode call|in_person --work <dir> --min-turn 1,1.5 --out <prefix>
+           --cache-limit-mb <n> caps MLX's buffer cache (0 = MLX default); Transcriber modes re-pin it in start()
     """
 
 func fail(_ message: String) -> Never {
@@ -47,6 +51,15 @@ while let flag = argv.popFirst() {
     }
     guard let value = argv.popFirst() else { fail(usage) }
     args[String(flag.dropFirst(2))] = value
+}
+
+// 0 leaves MLX's default alone: MLX's own cacheLimit 0 disables the cache, which is not the same.
+if let value = args["cache-limit-mb"] {
+    guard let mb = Int(value), mb >= 0 else { fail("--cache-limit-mb needs a non-negative integer\n\(usage)") }
+    if mb > 0 {
+        Memory.cacheLimit = mb << 20
+        FileHandle.standardError.write(Data("[mlx-eval] MLX cache limit \(mb) MB\n".utf8))
+    }
 }
 
 // Where FluidAudio cached Silero for the spike tools; the app ships its own copy.

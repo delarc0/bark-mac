@@ -2,6 +2,7 @@ import BarkCore
 import CoreML
 import FluidAudio
 import Foundation
+import MLX
 import Synchronization
 import os
 
@@ -99,6 +100,8 @@ public actor Transcriber {
     /// The first decode after install compiles the Metal shaders (4 to 16 s measured).
     public static let warmUpTimeout: TimeInterval = 120
     public static let vadThreshold: Float = 0.5
+    /// Uncapped, MLX's buffer cache adds ~2.5 GB to a meeting process with no latency win (tasks/bark2.md, Memory cap).
+    public static let mlxCacheLimit = 256 * 1024 * 1024
     static let sampleRate = 16_000
 
     let worker = MLXWorker()
@@ -127,6 +130,7 @@ public actor Transcriber {
     /// Loads and warms the general model and Silero, then starts loading the Swedish model in the
     /// background. Returns once dictation can run.
     public func start() async throws {
+        Memory.cacheLimit = Self.mlxCacheLimit
         if vad == nil {
             vad = try Self.loadVAD(vadFolder)
         }
