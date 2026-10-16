@@ -15,6 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if let directory = ProcessInfo.processInfo.environment["BARK_SNAPSHOT"] {
+            NotebookSnapshot.run(directory)
+            return
+        }
+        #endif
         if let icon = NSImage(named: "Icon") { NSApp.applicationIconImage = icon }
         menuBar = MenuBarController()
     }

@@ -14,7 +14,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     let recorder: MeetingRecorder
     private let watcher = CallWatcher()
     private var panel: MenuBarPanel!
-    private var notesWindow: NotesWindowController?
+    private var meetingStartedFromOffer = false
     private let overlay: OverlayController
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
@@ -31,6 +31,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         recorder = MeetingRecorder(settings: .shared, models: .shared, library: .shared)
         super.init()
         panel = MenuBarPanel { [weak self] in self?.statusItem.button?.window?.frame }
+        NotebookWindowController.shared.connect(recorder)
         recorder.onStateChange = { [weak self] state in self?.meetingChanged(state) }
         recorder.onMessage = { [weak self] message in self?.panel.show(message) }
         watcher.onChange = { [weak self] change in self?.callChanged(change) }
@@ -89,16 +90,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func meetingChanged(_ state: MeetingRecorder.State) {
         updateButton()
+        NotebookWindowController.shared.recorderChanged(state)
         switch state {
         case .recording:
             watcher.pause()
             if panel.isShowingOffer { panel.hide() }
-            if notesWindow == nil { notesWindow = NotesWindowController(model: recorder.notes) }
-            notesWindow?.show()
+            NotebookWindowController.shared.present(selecting: recorder.meetingID,
+                                                   activating: !meetingStartedFromOffer, focusNotes: true)
+            meetingStartedFromOffer = false
         case .finishing:
-            notesWindow?.hide()
+            break
         case .idle:
-            notesWindow?.hide()
+            meetingStartedFromOffer = false
             watcher.resume()
         case .starting:
             break
@@ -110,13 +113,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .offer(let app):
             guard recorder.state == .idle else { return }
             panel.show(PanelMessage(title: "Record this call?", detail: Self.describe(app),
-                                    action: ("Record", { [weak self] in self?.recorder.start(callApp: app) }),
+                                    action: ("Record", { [weak self] in self?.startOfferedMeeting(app) }),
                                     dismissTitle: "Not Now"), offer: true)
         case .withdraw:
             if panel.isShowingOffer { panel.hide() }
         case .none:
             break
         }
+    }
+
+    private func startOfferedMeeting(_ app: CallApp) {
+        meetingStartedFromOffer = true
+        recorder.start(callApp: app)
     }
 
     /// A browser is tapped whole, every tab, and the user has to know that before recording.
@@ -422,6 +430,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func startMeeting() {
         panel.hide()
+        meetingStartedFromOffer = false
         recorder.start()
     }
 
@@ -430,13 +439,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func showNotes() {
-        notesWindow?.show()
-        NSApp.activate()
-        notesWindow?.window?.makeKey()
+        NotebookWindowController.shared.present(selecting: recorder.meetingID, focusNotes: true)
     }
 
     @objc private func openMeetings() {
-        MeetingsWindowController.shared.present(selecting: recorder.meetingID)
+        NotebookWindowController.shared.present(selecting: recorder.meetingID)
     }
 
     @objc private func pickMeetingLanguage(_ sender: NSMenuItem) {
