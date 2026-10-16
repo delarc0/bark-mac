@@ -1365,3 +1365,129 @@ and peak footprint drops from ~6.5 to ~4.9 GB. Set as `Transcriber.mlxCacheLimit
 (256 * 1024 * 1024), applied once in `Transcriber.start()`. Note for mlx-eval:
 pipeline and --meeting runs re-pin this value in start(), so --cache-limit-mb now
 governs engine-only runs only.
+
+## S6 result (2026-10-16): vocabulary prompting
+
+Question: does an initial prompt of names and terms raise how often spoken terms
+come out right, and how often does the model write prompt words that were never
+said? Engine-only on KB-Whisper 8-bit (Swedish) and large-v3 8-bit (English),
+M5 Pro on AC, nothing else on the GPU.
+
+Method. `Vocabulary.encode` is our own byte-level BPE from tokenizer.json
+(Whisper's split regex, merge ranks, no added prefix space, never a special
+token). Landmine found building it: **KB's tokenizer.json carries BPE
+`dropout: 0.2`**, which HF tokenizers samples at encode time, so it hands out
+random token ids; null it before any parity work. The two tokenizers' vocabs
+and merges are byte-identical, so both encode the same. `Engine.transcribe` and
+`transcribeTimestamped` take an optional `prompt`, laid out exactly as
+mlx_whisper: `[sotPrev] + encode(" " + prompt.trimmed).suffix(n_text_ctx/2 - 1)
++ [sot, language, transcribe, (noTimestamps)]`; the no-speech probability is
+read at sot's position in that sequence (index 0 only coincides without a
+prompt). Empty prompt is byte-identical to before (fleurs-sv 59/59, fleurs-en
+60/60 on the 8-bit models). Parity: a 27-string fixture against HF tokenizers
+matches exactly on both tokenizers; against mlx_whisper 0.4.3
+(`initial_prompt`, temperature 0) 10 of 10 clips match exactly per language.
+
+Prompts per clip (`eval/s6_prompts.py`, seeded): a clip's terms are capitalised
+mid-sentence words plus hyphenated or digit-bearing tokens, deduplicated per
+set (pools: fleurs-sv 92, fleurs-en 137). Conditions: `none`; `own+40` (own
+terms plus 40 others, "A, B, C"); `own+40-glossary` (same draw prefixed
+"Glossary: "); `own+150` (size test; the fleurs-sv pool only holds 92, so it
+ran at 92); `40` (others only, none in this clip's reference). Sets: fleurs-sv
+and dict-sv on swedish8, fleurs-en and dict-en on general8, plus noise and
+short08 under `40`. `eval/s6.sh` into `eval/s6`, scored by `eval/s6_score.py`
+(score.py's normaliser). A first matrix was discarded for GPU contention (a
+test run shared the machine); all tables below are one clean rerun, and every
+speech-set transcript is identical to the discarded run's, so WER and recall
+are solid. `none` ran first and last on fleurs-sv: WER 5.80% both times, p50
+0.47 vs 0.52 s.
+
+| fleurs-sv (59) | WER | delta | term recall | decode p50 |
+|---|---|---|---|---|
+| none | 5.80% | - | 70/91 (77%) | 0.47 s |
+| own+40 | 6.53% | +0.73 | 71/91 (78%) | 0.52 s |
+| own+40-glossary | 6.61% | +0.81 | 71/91 (78%) | 0.61 s |
+| own+150 (92 terms) | 7.01% | +1.21 | 72/91 (79%) | 0.58 s |
+| 40 | 6.45% | +0.64 | 71/91 (78%) | 0.60 s |
+| none-last | 5.80% | +0.00 | 70/91 (77%) | 0.52 s |
+
+| dict-sv (59) | WER | delta | term recall |
+|---|---|---|---|
+| none | 5.96% | - | 69/91 (76%) |
+| own+40 | 6.61% | +0.64 | 71/91 (78%) |
+| 40 | 6.53% | +0.56 | 71/91 (78%) |
+
+| fleurs-en (60) | WER | delta | term recall | decode p50 |
+|---|---|---|---|---|
+| none | 4.56% | - | 139/151 (92%) | 0.41 s |
+| own+40 | 4.63% | +0.07 | 141/151 (93%) | 0.41 s |
+| own+40-glossary | 4.78% | +0.21 | 141/151 (93%) | 0.44 s |
+| 40 | 4.78% | +0.21 | 137/151 (91%) | 0.43 s |
+
+| dict-en (60) | WER | delta | term recall |
+|---|---|---|---|
+| none | 4.35% | - | 139/151 (92%) |
+| own+40 | 4.49% | +0.14 | 142/151 (94%) |
+| 40 | 5.06% | +0.70 | 137/151 (91%) |
+
+Term recall counts a clip's own terms in the hypothesis (normalised,
+case-insensitive). The recall gains are single clips: "10 agenter" for "tio"
+(1671 sv), "Shekhar" for "Shekar" (1669 en), "SANParks" for "sand parks" (1707
+en, in the prompt). The WER cost is spread over ordinary words: prompted runs
+split compounds ("centralregering" became "central och regering", 1673), drop
+small words ("ett", 1660) and take glossary casing onto common nouns
+("läckan" became "Lekan", 1665).
+
+Insertions (prompt terms in the hypothesis but never said):
+
+| where | count | per 100 prompt terms |
+|---|---|---|
+| all speech sets, all conditions | 3 | 0.01 |
+| of which short08-en/40 | 3 | 0.12 |
+| short08-sv/40, noise, dict, fleurs | 0 | 0.00 |
+
+Every prompt-caused insertion: short08-en 1664 (a clip that decodes EMPTY
+unprompted) answered its 40-term prompt with "...why you would degrade
+Americans makes you all the", inserting "Americans" and "All"; short08-en
+1666's clean unprompted decode gained "Vigil" mid-sentence. Two more flagged
+terms are parenthesised acronyms in the written reference that the prompt
+brought out: "SANParks" (1707, a recall win: unprompted wrote "sand parks")
+and "CEP" (1703 sv, own+150 only; unprompted drops it, so plausibly spoken
+unclearly, not said, or said as letters). Insertions the unprompted run also
+writes are not the prompt's doing and are excluded above: "USGS" and "I"
+(FLEURS refs are abridged) and "75,6"/"62,2" (spoken, missing from ref 1682).
+
+Noise and short clips under `40`: KB stays at 0 words on all 28 noise clips
+even with 40 Swedish terms in the prompt. large-v3 produces text on 27 of 28
+noise clips (94 words of its usual "Thank you for watching!" class, 0 prompt
+terms inserted; unprompted it produced 40 words), and the Silero gate rejects
+all of these in the pipeline. short08-en with a prompt turns 5 unprompted
+empties into 0 empty, partly by writing prompt words (the insertions above);
+short08-sv has 1 empty (0 unprompted), 0 insertions.
+
+Decode cost: paired per clip against `none`, p50 +0.03 s (en) and +0.04 s (sv)
+at ~40 terms, +0.11 s at 92 terms; the prompt is prefill only, generation is
+unchanged. p95 could not be measured cleanly tonight: isolated system stalls
+hit individual clips in both matrices (the none/none-last pair shows it), so
+the p95 columns in `eval/s6/report.txt` are noisy; p50 and the paired deltas
+agree across runs.
+
+**Recommendation: do not ship prompting for dictation as measured.** On read
+speech it buys 1 to 2 term-recall points (on names the model mostly already
+knows) for 0.6 to 1.2 WER points on Swedish and 0.1 to 0.7 on English, and the
+cost grows with prompt size. The insertion risk is real but small and
+concentrated in short, uncertain audio. If Erik's real clips (the D7 list:
+Leadfabriken, Tegen, client names) show the upside this set cannot measure,
+the format to use is: a bare "A, B, C" term list (the "Glossary: " framing
+scored slightly worse on both languages), at most about 40 terms (WER cost
+roughly doubles from 40 to 92), terms only, never sentences, and no prompt on
+audio under about 2 s (all genuine insertions happened on 0.8 s clips). The
+prompt adds under 0.05 s of prefill at that size, inside D3's budget, and it
+does not change the noise story: KB silent, large-v3 gated by Silero.
+
+Honest limits: FLEURS names are mostly famous ones the model already knows,
+so the gain on rare in-house names is underestimated; the insertion risk is
+what this set measures well. Sets are read speech, not dictation; the term
+extractor also picks up junk terms ("I", bare numbers), which is realistic for
+an hq-fed list. `own+150` ran at 92 terms because the fleurs-sv pool holds
+only 92.

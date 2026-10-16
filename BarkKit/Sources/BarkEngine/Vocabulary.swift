@@ -1,16 +1,37 @@
 import Foundation
 
 /// Whisper's token table and special ids, read from a Hugging Face tokenizer.json (model.vocab
-/// plus added_tokens). Lookups and the byte-level decode only: nothing here encodes text, because
-/// a BPE encode is what went wrong for KB in the vendored tokenizer (S8).
+/// plus added_tokens). Lookups and the byte-level decode, plus a byte-level BPE encode for
+/// prompting; the vendored tokenizer's encode is unusable for KB (S8), so the BPE lives here.
 public struct Vocabulary: Sendable {
     let tokens: [String?]
     let ids: [String: Int]
+    /// model.vocab only: encode never produces special tokens from text.
+    let bpeIds: [String: Int]
+    /// Merge pair to rank from model.merges, the pair joined with U+0000 (no token contains it).
+    let mergeRanks: [String: Int]
     let eot, sot, transcribe, translate, sotLm, sotPrev, noSpeech, noTimestamps, timestampBegin: Int
 
     public init(tokenizerJSON url: URL) throws {
         struct File: Decodable {
-            struct Model: Decodable { let vocab: [String: Int] }
+            struct Model: Decodable {
+                struct Merge: Decodable {
+                    let first, second: String
+                    init(from decoder: any Decoder) throws {
+                        let container = try decoder.singleValueContainer()
+                        if let pair = try? container.decode([String].self) {
+                            guard pair.count == 2 else { throw DecodingError.dataCorruptedError(in: container, debugDescription: "merge is not a pair") }
+                            (first, second) = (pair[0], pair[1])
+                        } else {
+                            let joined = try container.decode(String.self).split(separator: " ")
+                            guard joined.count == 2 else { throw DecodingError.dataCorruptedError(in: container, debugDescription: "merge is not a pair") }
+                            (first, second) = (String(joined[0]), String(joined[1]))
+                        }
+                    }
+                }
+                let vocab: [String: Int]
+                let merges: [Merge]
+            }
             struct Added: Decodable { let id: Int; let content: String }
             let model: Model
             let added_tokens: [Added]
@@ -20,12 +41,18 @@ public struct Vocabulary: Sendable {
         for added in file.added_tokens { ids[added.content] = added.id }
         var tokens = [String?](repeating: nil, count: (ids.values.max() ?? -1) + 1)
         for (token, id) in ids { tokens[id] = token }
-        try self.init(tokens: tokens, ids: ids)
+        var mergeRanks: [String: Int] = [:]
+        for (rank, merge) in file.model.merges.enumerated() where file.model.vocab[merge.first + merge.second] != nil {
+            mergeRanks[merge.first + "\0" + merge.second] = rank
+        }
+        try self.init(tokens: tokens, ids: ids, bpeIds: file.model.vocab, mergeRanks: mergeRanks)
     }
 
-    init(tokens: [String?], ids: [String: Int]) throws {
+    init(tokens: [String?], ids: [String: Int], bpeIds: [String: Int]? = nil, mergeRanks: [String: Int] = [:]) throws {
         self.tokens = tokens
         self.ids = ids
+        self.bpeIds = bpeIds ?? ids
+        self.mergeRanks = mergeRanks
         func id(_ token: String) throws -> Int {
             guard let id = Self.roundTrip(token, tokens, ids) else { throw EngineError(description: "tokenizer has no \(token)") }
             return id
@@ -99,6 +126,46 @@ public struct Vocabulary: Sendable {
         let bytes = ids.compactMap(token).flatMap { $0.unicodeScalars.compactMap { Self.byteDecoder[$0] } }
         return String(decoding: bytes, as: UTF8.self)
     }
+
+    /// Byte-level BPE encode, the same ids tiktoken gives mlx_whisper for an initial prompt:
+    /// Whisper's regex splits the text into pieces, each piece's bytes map through the GPT-2
+    /// byte-to-unicode table and merge by rank. Plain text only, never a special token, and no
+    /// added prefix space (the caller adds " " itself, like mlx_whisper).
+    public func encode(_ text: String) -> [Int] {
+        var out: [Int] = []
+        for match in Self.pieceRegex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            var word = text[Range(match.range, in: text)!].utf8.map { String(Self.byteEncoder[Int($0)]) }
+            while word.count > 1 {
+                var best = -1
+                var bestRank = Int.max
+                for i in 0 ..< word.count - 1 {
+                    if let rank = mergeRanks[word[i] + "\0" + word[i + 1]], rank < bestRank {
+                        (best, bestRank) = (i, rank)
+                    }
+                }
+                if best < 0 { break }
+                let merged = word[best] + word[best + 1]
+                var next: [String] = []
+                var i = 0
+                while i < word.count {
+                    if i < word.count - 1, word[i] + word[i + 1] == merged {
+                        next.append(merged)
+                        i += 2
+                    } else {
+                        next.append(word[i])
+                        i += 1
+                    }
+                }
+                word = next
+            }
+            out += word.map { bpeIds[$0]! }
+        }
+        return out
+    }
+
+    /// Whisper's pre-tokenizer split regex (the GPT-2 pattern tiktoken uses, lowercase
+    /// contractions included), the same splits HF tokenizers' ByteLevel makes.
+    static let pieceRegex = try! NSRegularExpression(pattern: #"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"#)
 
     /// GPT-2's bytes_to_unicode, indexed by byte.
     static let byteEncoder: [Unicode.Scalar] = {

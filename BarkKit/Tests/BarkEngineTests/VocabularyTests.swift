@@ -1,4 +1,5 @@
 @testable import BarkEngine
+import Foundation
 import Testing
 
 struct VocabularyTests {
@@ -44,5 +45,26 @@ struct VocabularyTests {
             #expect(vocabulary.vocabId(bytes) == id)
         }
         #expect(vocabulary.text([vocabulary.vocabId(Array(" the".utf8))!]) == " the")
+    }
+
+    /// The committed fixture (eval/vocab_fixture.py): HF tokenizers ids for both tokenizers.
+    /// Runs on whichever of fp16/8-bit is installed; both symlink the same tokenizer.json.
+    @Test(.enabled(if: Fixtures.generalID != nil), arguments: ["swedish", "general"])
+    func encodeParity(_ role: String) throws {
+        let ids = ["swedish": [ModelID.swedish8, ModelID.swedish], "general": [Fixtures.generalID!]]
+        guard let id = ids[role]!.first(where: Fixtures.store.isInstalled) else { return }
+        struct Fixture: Decodable { let strings: [String]; let expected: [String: [[Int]]] }
+        let url = URL(filePath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../eval/vocabulary-encode.json").standardizedFileURL
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        let vocabulary = try Vocabulary(tokenizerJSON: Fixtures.store.folder(id).appending(path: "tokenizer.json"))
+        for (string, expected) in zip(fixture.strings, fixture.expected[role]!) {
+            #expect(vocabulary.encode(string) == expected, "\(string)")
+            #expect(vocabulary.text(vocabulary.encode(string)) == string)
+        }
+        // Text never encodes to a special token, even one spelled out in the input.
+        let specials = "<|endoftext|> och <|startofprev|>"
+        #expect(vocabulary.encode(specials).allSatisfy { $0 < vocabulary.eot })
+        #expect(vocabulary.text(vocabulary.encode(specials)) == specials)
     }
 }

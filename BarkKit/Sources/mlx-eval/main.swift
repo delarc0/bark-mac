@@ -24,9 +24,12 @@ import MLX
 // --cache-limit-mb <n> caps MLX's buffer cache at n MB (0 = MLX default, unlimited). Transcriber
 // modes (--pipeline, --meeting) re-pin it to Transcriber.mlxCacheLimit in start(); the flag only
 // holds for engine-only runs.
+// --prompts <file.json> (engine-only) maps clip id to an initial prompt string for its decode
+// (S6); a clip absent from the map decodes unprompted, and the row carries the prompt used.
 
 let usage = """
     usage: mlx-eval --model swedish|swedish8|general|general8 --language <code> --clips <dir> --out <file.jsonl>
+           mlx-eval --model <as above> --language <code> [--prompts <file.json>] --clips <dir> --out <file.jsonl>
            mlx-eval --pipeline [--realtime 1] --model <as above> --language <code> ...
            mlx-eval --pipeline --realtime 1 --model general8 --language sv [--background-split <store>] [--gap 2] ...
            mlx-eval --pipeline [--realtime 1] --model auto|auto8 --language auto ...
@@ -181,12 +184,17 @@ let encoder = JSONEncoder()
 encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
 
 if !pipeline {
+    // --prompts: clip id to the initial prompt for its decode; absent ids decode unprompted.
+    var prompts: [String: String] = [:]
+    if let path = args["prompts"] {
+        prompts = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+    }
     let loadStart = clock.now
     let engine = try Engine(folder: store.folder(modelIDs[model]!))
     log("loaded \(model) in \(String(format: "%.2f", seconds(clock.now - loadStart)))s, active \(gigabytes(Memory.activeMemory)), peak \(gigabytes(Memory.peakMemory))")
 
     let warmStart = clock.now
-    _ = try engine.transcribe(try load(clips[0]), language: language)
+    _ = try engine.transcribe(try load(clips[0]), language: language, prompt: prompts[String(clips[0].dropLast(4))] ?? "")
     log("first decode \(String(format: "%.2f", seconds(clock.now - warmStart)))s")
 
     struct Row: Encodable {
@@ -195,14 +203,27 @@ if !pipeline {
         let decode_seconds: Double
         let audio_seconds: Double
         let tokens: Int
+        let prompt: String?
+        enum CodingKeys: String, CodingKey { case id, hypothesis, decode_seconds, audio_seconds, tokens, prompt }
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(hypothesis, forKey: .hypothesis)
+            try container.encode(decode_seconds, forKey: .decode_seconds)
+            try container.encode(audio_seconds, forKey: .audio_seconds)
+            try container.encode(tokens, forKey: .tokens)
+            try container.encodeIfPresent(prompt, forKey: .prompt)
+        }
     }
     for (index, clip) in clips.enumerated() {
+        let id = String(clip.dropLast(4))
         let samples = try load(clip)
         let start = clock.now
-        let result = try engine.transcribe(samples, language: language)
+        let result = try engine.transcribe(samples, language: language, prompt: prompts[id] ?? "")
         let decode = seconds(clock.now - start)
-        let row = Row(id: String(clip.dropLast(4)), hypothesis: result.text, decode_seconds: decode,
-                      audio_seconds: Double(samples.count) / 16_000, tokens: result.tokens)
+        let row = Row(id: id, hypothesis: result.text, decode_seconds: decode,
+                      audio_seconds: Double(samples.count) / 16_000, tokens: result.tokens,
+                      prompt: prompts[id])
         try out.write(contentsOf: encoder.encode(row) + Data("\n".utf8))
         log("\(index + 1)/\(clips.count) \(row.id) \(String(format: "%.2f", decode))s t=\(result.temperature)")
     }
