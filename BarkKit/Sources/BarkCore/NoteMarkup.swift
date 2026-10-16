@@ -155,6 +155,13 @@ public enum NoteMarkup {
                     selection: NSRange(location: marker.location, length: 0))
     }
 
+    /// A caret inside a line's hidden marker moves to the start of the line's content.
+    public static func caretOutsideMarker(in text: String, selection: NSRange) -> NSRange? {
+        guard selection.length == 0, let line = line(in: text, at: selection.location), line.markerRange != nil,
+              selection.location >= line.range.location, selection.location < line.contentRange.location else { return nil }
+        return NSRange(location: line.contentRange.location, length: 0)
+    }
+
     public static func selectionAfterMoving(in text: String, selection: NSRange,
                                             direction: SelectionDirection, extending: Bool) -> NSRange? {
         guard selection.location >= 0, selection.upperBound <= (text as NSString).length else { return nil }

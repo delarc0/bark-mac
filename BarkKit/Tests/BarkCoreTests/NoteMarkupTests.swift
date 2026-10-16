@@ -226,6 +226,16 @@ struct NoteMarkupSelectionTests {
                                       length: thirdContent - lines[1].range.upperBound))
     }
 
+    @Test func aCaretInsideAMarkerMovesToTheContent() {
+        let text = "one\n  - [ ] two\nthree"
+        let line = 4
+        #expect(NoteMarkup.caretOutsideMarker(in: text, selection: NSRange(location: line, length: 0)) == NSRange(location: line + 8, length: 0))
+        #expect(NoteMarkup.caretOutsideMarker(in: text, selection: NSRange(location: line + 3, length: 0)) == NSRange(location: line + 8, length: 0))
+        #expect(NoteMarkup.caretOutsideMarker(in: text, selection: NSRange(location: line + 8, length: 0)) == nil)
+        #expect(NoteMarkup.caretOutsideMarker(in: text, selection: NSRange(location: 1, length: 0)) == nil)
+        #expect(NoteMarkup.caretOutsideMarker(in: text, selection: NSRange(location: line, length: 3)) == nil)
+    }
+
     @Test func ordinaryBodyMovementUsesTheTextViewDefault() {
         #expect(NoteMarkup.selectionAfterMoving(in: "one\n two", selection: NSRange(location: 2, length: 0),
                                                 direction: .left, extending: false) == nil)

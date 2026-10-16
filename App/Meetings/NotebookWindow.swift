@@ -3,7 +3,7 @@ import BarkCore
 import BarkStore
 import SwiftUI
 
-final class NotebookWindowController: AppWindowController {
+final class NotebookWindowController: AppWindowController, NSMenuItemValidation {
     static let shared = NotebookWindowController()
 
     private let model: NotebookModel
@@ -17,6 +17,7 @@ final class NotebookWindowController: AppWindowController {
         window?.setContentSize(NSSize(width: 1000, height: 650))
         window?.contentMinSize = NSSize(width: 320, height: 240)
         window?.setFrameAutosaveName("BarkNotebook")
+        installNewMeetingCommand()
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.window?.isVisible == true else { return }
@@ -56,6 +57,22 @@ final class NotebookWindowController: AppWindowController {
             window?.orderFrontRegardless()
         }
         if focusNotes { model.focusNotes() }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        window?.isKeyWindow == true && model.canStart
+    }
+
+    private func installNewMeetingCommand() {
+        guard let file = NSApp.mainMenu?.item(withTitle: "File")?.submenu else { return }
+        let command = NSMenuItem(title: "New Meeting", action: #selector(newMeeting), keyEquivalent: "n")
+        command.keyEquivalentModifierMask = .command
+        command.target = self
+        file.insertItem(command, at: 0)
+    }
+
+    @objc private func newMeeting() {
+        model.startMeeting()
     }
 }
 
@@ -104,39 +121,37 @@ private struct NotebookSidebar: View {
     let delete: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Button(action: model.startMeeting) {
-                Label("New Meeting", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(!model.canStart)
-            .padding(10)
-
-            List(selection: $model.selection) {
-                ForEach(model.groups) { group in
-                    Section {
-                        ForEach(group.rows) { row in
-                            NotebookRow(row: row, selected: model.selection == row.id,
-                                        recording: model.isRecording(row.meeting))
-                                .tag(row.id)
-                        }
-                    } header: {
-                        Text(group.title)
-                            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+        List(selection: $model.selection) {
+            ForEach(model.groups) { group in
+                Section {
+                    ForEach(group.rows) { row in
+                        NotebookRow(row: row, recording: model.isRecording(row.meeting))
+                            .tag(row.id)
                     }
+                } header: {
+                    Text(group.title)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                 }
             }
-            .listStyle(.sidebar)
-            .overlay {
-                if model.rows.isEmpty {
-                    ContentUnavailableView("No Meetings", systemImage: "waveform")
-                }
+        }
+        .listStyle(.sidebar)
+        .overlay {
+            if model.rows.isEmpty {
+                ContentUnavailableView("No Meetings", systemImage: "waveform")
             }
-            .onKeyPress(.delete) {
-                guard model.canDelete else { return .ignored }
-                delete()
-                return .handled
+        }
+        .onKeyPress(.delete) {
+            guard model.canDelete else { return .ignored }
+            delete()
+            return .handled
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: model.startMeeting) {
+                    Image(systemName: "square.and.pencil")
+                }
+                .help("New Meeting")
+                .disabled(!model.canStart)
             }
         }
     }
@@ -144,7 +159,6 @@ private struct NotebookSidebar: View {
 
 private struct NotebookRow: View {
     let row: NotebookModel.Row
-    let selected: Bool
     let recording: Bool
 
     var body: some View {
@@ -152,7 +166,7 @@ private struct NotebookRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayTitle)
                     .lineLimit(1)
-                    .foregroundStyle(selected ? Color.white : Color(nsColor: .labelColor))
+                    .foregroundStyle(Color(nsColor: .labelColor))
                 HStack(spacing: 5) {
                     Text(row.meeting.startedAt, format: .dateTime.hour().minute())
                     Text("·")
@@ -169,7 +183,7 @@ private struct NotebookRow: View {
                     }
                 }
                 .font(.caption)
-                .foregroundStyle(selected ? Color.white.opacity(0.75) : Color(nsColor: .secondaryLabelColor))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
             }
             Spacer(minLength: 0)
             if recording {
@@ -199,12 +213,14 @@ private struct NotebookDetail: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 0) {
                     NotebookTitleField(model: model, meeting: meeting)
                         .id(meeting.id)
                     NotebookMetaLine(model: model, meeting: meeting)
+                        .padding(.top, 4)
                     if let message = model.detail.rejected {
                         NotebookRejectedNotice(message: message, retry: model.retryUpload)
+                            .padding(.top, 12)
                     }
                     NoteEditor(text: $model.notesText, focusToken: model.focusNotesToken)
                         .frame(maxWidth: .infinity)
@@ -218,6 +234,7 @@ private struct NotebookDetail: View {
                                     .allowsHitTesting(false)
                             }
                         }
+                        .padding(.top, 18)
                     if !compact {
                         DisclosureGroup(isExpanded: $model.transcriptOpen) {
                             NotebookTranscript(model: model, meeting: meeting)
@@ -233,11 +250,13 @@ private struct NotebookDetail: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        .padding(.top, 4)
+                        .padding(.top, 18)
                     }
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: 680)
+                .padding(.horizontal, compact ? 16 : 24)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 16)
             }
             .onChange(of: model.detail.items.count) {
                 guard !compact, meeting.status == .recording, model.transcriptOpen, followTranscript else { return }
@@ -293,7 +312,7 @@ private struct NotebookTitleField: View {
         TextField(model.displayTitle(for: meeting), text: $draft)
             .labelsHidden()
             .textFieldStyle(.plain)
-            .font(.title2.weight(.semibold))
+            .font(.system(size: 26, weight: .semibold))
             .focused($focused)
             .onSubmit(commit)
             .onChange(of: focused) {

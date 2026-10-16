@@ -7,27 +7,30 @@ import SwiftUI
 @MainActor
 enum NotebookSnapshot {
     static func run(_ directory: String) {
-        do {
-            let output = URL(fileURLWithPath: directory, isDirectory: true)
-            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-            let temporary = FileManager.default.temporaryDirectory.appending(path: "BarkNotebookSnapshot-\(UUID().uuidString)")
-            defer { try? FileManager.default.removeItem(at: temporary) }
-            let store = try MeetingStore(root: temporary)
-            let live = try populate(store)
-            let model = NotebookModel(store: store)
-            model.reload()
-            model.selection = live
-            let sizes = [NSSize(width: 1100, height: 700), NSSize(width: 360, height: 640)]
-            for size in sizes {
-                for dark in [false, true] {
-                    let name = "notebook-\(Int(size.width))x\(Int(size.height))-\(dark ? "dark" : "light").png"
-                    try render(model, size: size, dark: dark, to: output.appending(path: name))
+        DispatchQueue.main.async {
+            do {
+                let output = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+                let temporary = FileManager.default.temporaryDirectory.appending(path: "BarkNotebookSnapshot-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                let store = try MeetingStore(root: temporary)
+                let live = try populate(store)
+                let model = NotebookModel(store: store)
+                model.reload()
+                model.selection = live
+                model.focusNotes()
+                let sizes = [NSSize(width: 1100, height: 700), NSSize(width: 360, height: 640)]
+                for size in sizes {
+                    for dark in [false, true] {
+                        let name = "notebook-\(Int(size.width))x\(Int(size.height))-\(dark ? "dark" : "light").png"
+                        try render(model, size: size, dark: dark, to: output.appending(path: name))
+                    }
                 }
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("Snapshot failed: \(error)\n".utf8))
+                exit(1)
             }
-            exit(0)
-        } catch {
-            FileHandle.standardError.write(Data("Snapshot failed: \(error)\n".utf8))
-            exit(1)
         }
     }
 
@@ -45,11 +48,21 @@ enum NotebookSnapshot {
         window.contentView = hosting
         window.setContentSize(size)
         hosting.layoutSubtreeIfNeeded()
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
         RunLoop.current.run(until: .now.addingTimeInterval(0.2))
         window.setContentSize(size)
         hosting.setFrameSize(size)
         hosting.layoutSubtreeIfNeeded()
         hosting.displayIfNeeded()
+        if let editor = noteTextView(in: hosting) {
+            editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            window.makeFirstResponder(editor)
+            editor.drawsCaretForSnapshot = true
+            editor.setNeedsDisplay(editor.bounds)
+            hosting.displayIfNeeded()
+        }
 
         guard let cached = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { throw SnapshotError.rendering }
         hosting.cacheDisplay(in: hosting.bounds, to: cached)
@@ -72,11 +85,19 @@ enum NotebookSnapshot {
         window.close()
     }
 
+    private static func noteTextView(in view: NSView) -> NoteTextView? {
+        if let editor = view as? NoteTextView { return editor }
+        for child in view.subviews {
+            if let editor = noteTextView(in: child) { return editor }
+        }
+        return nil
+    }
+
     private static func populate(_ store: MeetingStore) throws -> UUID {
         let now = Date.now
         let live = try store.createMeeting(language: "en", mode: .call, title: "Weekly with Tegen",
                                            startedAt: now.addingTimeInterval(-42 * 60))
-        try store.setNotes(live.id, "# Decisions\n- Budget for Q1 agreed\n- Helena sends the brief on Friday afternoon after the client review is complete\n## Actions\n[ ] Book the shoot\n- [x] Share the agenda")
+        try store.setNotes(live.id, "# Decisions\n- Budget for Q1 agreed\n- Helena sends the brief on Friday afternoon after the client review is complete\n  * Follow up with the client\n## Actions\n[ ] Book the shoot\n- [x] Share the agenda")
         try store.addSegment(Segment(stream: .me, start: 4, end: 9, text: "Can we agree the Q1 budget today?",
                                      model: "fixture", language: "en"), to: live.id)
         try store.addSegment(Segment(stream: .them, start: 12, end: 18, text: "Yes, the numbers look good.",
