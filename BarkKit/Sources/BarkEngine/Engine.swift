@@ -50,8 +50,8 @@ public final class Engine: @unchecked Sendable {
         textMask = mask(Set(0 ..< vocabulary.timestampBegin))
     }
 
-    public func transcribe(_ samples: [Float], language: String) throws -> Transcription {
-        let initial = [vocabulary.sot, try vocabulary.language(language), vocabulary.transcribe, vocabulary.noTimestamps]
+    public func transcribe(_ samples: [Float], language: String, prompt: String = "") throws -> Transcription {
+        let (initial, sotIndex) = try initialTokens(language: language, noTimestamps: true, prompt: prompt)
         // One 30 s window and no seek loop: Bark2's segmenter cuts every segment under 30 s.
         guard samples.count <= nSamples else {
             throw EngineError(description: "audio is \(Double(samples.count) / Double(sampleRate)) s; the engine decodes one 30 s window")
@@ -61,7 +61,7 @@ public final class Engine: @unchecked Sendable {
         // on audio of 1 s or more and treat a decode that opens with it as empty. Under 1 s KB also
         // says it on real short speech, so it stays suppressed there.
         let allowNoSpeech = Double(samples.count) / Double(sampleRate) >= 1.0
-        let result = decodeWithFallback(features, initial: initial, allowNoSpeech: allowNoSpeech, timestamps: false)
+        let result = decodeWithFallback(features, initial: initial, sotIndex: sotIndex, allowNoSpeech: allowNoSpeech, timestamps: false)
         let text = isSilent(result, allowNoSpeech: allowNoSpeech)
             ? "" : vocabulary.text(result.tokens.filter { $0 < vocabulary.eot }).trimmingCharacters(in: .whitespacesAndNewlines)
         return Transcription(text: text, tokens: result.tokens.count, temperature: result.temperature)
@@ -71,8 +71,8 @@ public final class Engine: @unchecked Sendable {
     /// conditioning on earlier text, plus its seek loop, so a window that ends before the audio
     /// does carries on from its last timestamp. The re-decode for a decode that stopped short.
     /// `tokens` counts every sampled token over all windows.
-    public func transcribeTimestamped(_ samples: [Float], language: String) throws -> Transcription {
-        let initial = [vocabulary.sot, try vocabulary.language(language), vocabulary.transcribe]
+    public func transcribeTimestamped(_ samples: [Float], language: String, prompt: String = "") throws -> Transcription {
+        let (initial, sotIndex) = try initialTokens(language: language, noTimestamps: false, prompt: prompt)
         let mel = model.logMel(samples)
         let content = mel.dim(0) - nFrames
         var seek = 0
@@ -83,7 +83,7 @@ public final class Engine: @unchecked Sendable {
             let frames = min(nFrames, content - seek)
             let features = model.encoder(model.melWindow(mel, from: seek, frames: frames))
             let allowNoSpeech = Double(frames * hopLength) / Double(sampleRate) >= 1.0
-            let result = decodeWithFallback(features, initial: initial, allowNoSpeech: allowNoSpeech, timestamps: true)
+            let result = decodeWithFallback(features, initial: initial, sotIndex: sotIndex, allowNoSpeech: allowNoSpeech, timestamps: true)
             sampled += result.tokens.count
             temperature = max(temperature, result.temperature)
             if isSilent(result, allowNoSpeech: allowNoSpeech) {
@@ -98,11 +98,26 @@ public final class Engine: @unchecked Sendable {
         return Transcription(text: text, tokens: sampled, temperature: temperature)
     }
 
-    private func decodeWithFallback(_ features: MLXArray, initial: [Int], allowNoSpeech: Bool, timestamps: Bool) -> Decoded {
+    /// The decoder's initial sequence, exactly mlx_whisper's layout with an initial prompt:
+    /// [sotPrev] + promptTokens.suffix(n_text_ctx / 2 - 1) + [sot, language, transcribe,
+    /// (noTimestamps)], promptTokens = encode(" " + prompt.trimmed). An empty prompt leaves the
+    /// sot sequence alone, byte-identical to no prompt at all. sotIndex is where the no-speech
+    /// probability is read (index 0 coincides with it only when there is no prompt).
+    private func initialTokens(language: String, noTimestamps: Bool, prompt: String) throws -> (tokens: [Int], sotIndex: Int) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let promptTokens = trimmed.isEmpty ? [] : vocabulary.encode(" " + trimmed)
+        var initial = promptTokens.isEmpty ? [] : [vocabulary.sotPrev] + promptTokens.suffix(model.dims.n_text_ctx / 2 - 1)
+        let sotIndex = initial.count
+        initial += [vocabulary.sot, try vocabulary.language(language), vocabulary.transcribe]
+        if noTimestamps { initial.append(vocabulary.noTimestamps) }
+        return (initial, sotIndex)
+    }
+
+    private func decodeWithFallback(_ features: MLXArray, initial: [Int], sotIndex: Int, allowNoSpeech: Bool, timestamps: Bool) -> Decoded {
         func run(_ t: Float) -> Decoded {
             timestamps
-                ? decodeTimestamped(features, initial: initial, temperature: t, allowNoSpeech: allowNoSpeech)
-                : decode(features, initial: initial, temperature: t, allowNoSpeech: allowNoSpeech)
+                ? decodeTimestamped(features, initial: initial, sotIndex: sotIndex, temperature: t, allowNoSpeech: allowNoSpeech)
+                : decode(features, initial: initial, sotIndex: sotIndex, temperature: t, allowNoSpeech: allowNoSpeech)
         }
         var result = run(0)
         for t in temperatures.dropFirst() {
@@ -189,7 +204,7 @@ public final class Engine: @unchecked Sendable {
 
     /// mlx_whisper DecodingTask.run, greedy (or sampled at t > 0), batch 1. Like the Python loop,
     /// the next step is queued before the current token is read back, so the GPU never idles.
-    private func decode(_ features: MLXArray, initial: [Int], temperature: Float, allowNoSpeech: Bool) -> Decoded {
+    private func decode(_ features: MLXArray, initial: [Int], sotIndex: Int, temperature: Float, allowNoSpeech: Bool) -> Decoded {
         let suppress = allowNoSpeech ? suppressAllowingNoSpeech : suppress
         func sample(_ logits: MLXArray, first: Bool) -> (MLXArray, MLXArray) {
             var logits = logits + suppress
@@ -201,7 +216,7 @@ public final class Engine: @unchecked Sendable {
 
         let (preLogits, firstCache) = model.decoder(MLXArray(initial.map(Int32.init)).expandedDimensions(axis: 0), xa: features, cache: nil)
         let logits = preLogits[0].asType(.float32)
-        let noSpeechProb = softmax(logits[0], axis: -1)[vocabulary.noSpeech]
+        let noSpeechProb = softmax(logits[sotIndex], axis: -1)[vocabulary.noSpeech]
         var cache = firstCache
         var pending = sample(logits[initial.count - 1], first: true)
         asyncEval(pending.0, pending.1, noSpeechProb)
@@ -236,7 +251,7 @@ public final class Engine: @unchecked Sendable {
 extension Engine {
     /// The timestamped decode: one token per step, because the timestamp rules for the next token
     /// depend on the one just sampled (the plain decode overlaps the two).
-    private func decodeTimestamped(_ features: MLXArray, initial: [Int], temperature: Float, allowNoSpeech: Bool) -> Decoded {
+    private func decodeTimestamped(_ features: MLXArray, initial: [Int], sotIndex: Int, temperature: Float, allowNoSpeech: Bool) -> Decoded {
         let suppress = allowNoSpeech ? suppressAllowingNoSpeech : suppress
         let begin = vocabulary.timestampBegin
         let vocab = model.dims.n_vocab
@@ -249,7 +264,7 @@ extension Engine {
             let (out, nextCache) = model.decoder(MLXArray(input.map(Int32.init)).expandedDimensions(axis: 0), xa: features, cache: cache)
             cache = nextCache
             let all = out[0].asType(.float32)
-            if step == 0 { noSpeechProb = softmax(all[0], axis: -1)[vocabulary.noSpeech].item(Float.self) }
+            if step == 0 { noSpeechProb = softmax(all[sotIndex], axis: -1)[vocabulary.noSpeech].item(Float.self) }
             var logits = all[all.dim(0) - 1] + suppress
             if step == 0 { logits = logits + suppressBlank }
             logits = logits + MLXArray(Self.timestampMask(after: sampled, timestampBegin: begin, eot: vocabulary.eot,
