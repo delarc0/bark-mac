@@ -63,7 +63,7 @@ final class MeetingRecorder {
 
     /// What Start would record right now: a detected call unless the user picked otherwise.
     func upcomingPlan() -> MeetingCapturePlan {
-        .plan(nextMode, processes: AudioApps.running())
+        .plan(nextMode, processes: AudioApps.running(), appName: AudioApps.localizedName(forPID:))
     }
 
     /// `callApp` is the call an offer was accepted for; otherwise the plan follows `nextMode`.
@@ -73,7 +73,7 @@ final class MeetingRecorder {
         let offered = callApp.map { CallApps.processes(of: $0, in: processes).map(\.pid) } ?? []
         // An offer accepted after its call ended falls back to the usual pick.
         let plan = callApp.flatMap { offered.isEmpty ? nil : MeetingCapturePlan.app($0, pids: offered) }
-            ?? .plan(nextMode, processes: processes)
+            ?? .plan(nextMode, processes: processes, appName: AudioApps.localizedName(forPID:))
         let language = settings.nextMeetingLanguage
         state = .starting
         serially { await self.begin(plan, language: language) }

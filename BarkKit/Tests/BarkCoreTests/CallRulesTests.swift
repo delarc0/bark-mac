@@ -227,7 +227,7 @@ struct CallAppsTests {
         #expect(CallApps.app(bundleID: "ru.keepcoder.Telegram")?.capturesAllTabs == false)
     }
 
-    @Test func aCallNeedsAudioInputFromACallAppOrBrowser() {
+    @Test func knownCallsNeedAudioInput() {
         #expect(CallApps.likelyCall([Self.process("us.zoom.xos", output: true)]) == nil)
         #expect(CallApps.likelyCall([Self.process("com.spotify.client", input: true)]) == nil)
         #expect(CallApps.likelyCall([Self.process("us.zoom.xos", input: true)])?.name == "Zoom")

@@ -18,8 +18,8 @@ struct MeetingDefaultsTests {
     }
 }
 
-private func process(_ pid: Int32, _ bundleID: String, input: Bool = true) -> AudioProcess {
-    AudioProcess(objectID: UInt32(pid), pid: pid, bundleID: bundleID, runningInput: input, runningOutput: true)
+private func process(_ pid: Int32, _ bundleID: String?, input: Bool = true, output: Bool = true) -> AudioProcess {
+    AudioProcess(objectID: UInt32(pid), pid: pid, bundleID: bundleID, runningInput: input, runningOutput: output)
 }
 
 struct MeetingCapturePlanTests {
@@ -30,8 +30,14 @@ struct MeetingCapturePlanTests {
         #expect(MeetingCapturePlan.plan(.automatic, processes: processes) == .app(zoom, pids: [10, 11]))
     }
 
+    @Test func automaticRecordsAnUnknownCallWithItsLocalizedName() {
+        let processes = [process(10, "com.example.around")]
+        let app = CallApp(name: "Around", bundleIDs: ["com.example.around"])
+        #expect(MeetingCapturePlan.plan(.automatic, processes: processes, appName: { _ in "Around" }) == .app(app, pids: [10]))
+    }
+
     @Test func automaticWithoutACallIsTheMicrophone() {
-        #expect(MeetingCapturePlan.plan(.automatic, processes: [process(12, "com.spotify.client")]) == .microphone)
+        #expect(MeetingCapturePlan.plan(.automatic, processes: [process(12, "com.spotify.client", output: false)]) == .microphone)
         #expect(MeetingCapturePlan.plan(.automatic, processes: [process(10, "us.zoom.xos", input: false)]) == .microphone)
     }
 
@@ -82,6 +88,101 @@ struct CallOffersTests {
     @Test func aProcessThatOnlyPlaysIsNoCall() {
         var offers = CallOffers()
         #expect(offers.observe([process(10, "us.zoom.xos", input: false)]) == .none)
+    }
+
+    @Test func unknownInputWithoutOutputNeverOffers() {
+        var offers = CallOffers()
+        let processes = [process(10, "com.example.around", output: false)]
+        #expect(offers.observe(processes) == .none)
+        #expect(offers.observe(processes) == .none)
+    }
+
+    @Test func unknownInputAndOutputNeedsTwoPollsAndOffersOnce() {
+        var offers = CallOffers()
+        let call = [process(10, "com.example.Around")]
+        let app = CallApp(name: "Around", bundleIDs: ["com.example.Around"])
+        #expect(offers.observe(call) == .none)
+        #expect(offers.observe(call) == .offer(app))
+        #expect(offers.observe(call) == .none)
+    }
+
+    @Test func unknownConfirmationRestartsAfterAnIncompletePoll() {
+        var offers = CallOffers()
+        let call = [process(10, "com.example.Around")]
+        let app = CallApp(name: "Around", bundleIDs: ["com.example.Around"])
+        #expect(offers.observe(call) == .none)
+        #expect(offers.observe([process(10, "com.example.Around", output: false)]) == .none)
+        #expect(offers.observe(call) == .none)
+        #expect(offers.observe(call) == .offer(app))
+    }
+
+    @Test func aKnownAppBeatsAnUnknownApp() {
+        var offers = CallOffers()
+        let zoom = CallApps.app(bundleID: "us.zoom.xos")!
+        let processes = [process(10, "com.example.around"), process(20, "us.zoom.xos")]
+        #expect(offers.observe(processes) == .offer(zoom))
+        #expect(offers.observe(processes) == .none)
+    }
+
+    @Test(arguments: [
+        "se.lab37.bark",
+        "se.lab37.bark.mac.dev",
+        "com.apple.VoiceMemos",
+        "com.apple.logic10",
+        "com.apple.garageband10",
+        "com.superduper.superwhisper",
+        "com.electron.wispr-flow",
+        "com.goodsnooze.MacWhisper",
+        "com.ableton.live",
+        "com.blackmagic-design.DaVinciResolve",
+        "com.obsproject.obs-studio",
+        "com.rogueamoeba.audiohijack",
+        "com.rogueamoeba.Loopback",
+    ])
+    func excludedAppsNeverOffer(bundleID: String) {
+        var offers = CallOffers()
+        let processes = [process(10, bundleID)]
+        #expect(offers.observe(processes) == .none)
+        #expect(offers.observe(processes) == .none)
+    }
+
+    @Test func aProcessWithoutABundleIDNeverOffers() {
+        var offers = CallOffers()
+        let processes = [process(10, nil)]
+        #expect(offers.observe(processes) == .none)
+        #expect(offers.observe(processes) == .none)
+    }
+
+    @Test func faceTimeStillOffersWithInputOnly() {
+        var offers = CallOffers()
+        let call = [process(10, "com.apple.FaceTime", output: false)]
+        #expect(offers.observe(call) == .offer(CallApps.app(bundleID: "com.apple.FaceTime")!))
+    }
+
+    @Test func helperOutputConfirmsAnUnknownCall() {
+        var offers = CallOffers()
+        let call = [process(10, "com.example.around", output: false),
+                    process(11, "com.example.around.helper", input: false)]
+        let app = CallApp(name: "around", bundleIDs: ["com.example.around"])
+        #expect(offers.observe(call) == .none)
+        #expect(offers.observe(call) == .offer(app))
+    }
+
+    @Test func unknownOfferWithdrawsWhenInputStops() {
+        var offers = CallOffers()
+        let call = [process(10, "com.example.Around")]
+        #expect(offers.observe(call) == .none)
+        #expect(offers.observe(call) != .none)
+        #expect(offers.observe([process(10, "com.example.Around", input: false)]) == .withdraw)
+        #expect(offers.observe([]) == .none)
+    }
+
+    @Test func anUnknownCallRecordedFromTheMenuIsNotOfferedAfterwards() {
+        var offers = CallOffers()
+        let call = [process(10, "com.example.around")]
+        offers.markHandled(call)
+        #expect(offers.observe(call) == .none)
+        #expect(offers.observe([]) == .withdraw)
     }
 }
 

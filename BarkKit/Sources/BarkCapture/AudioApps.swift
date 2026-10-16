@@ -1,3 +1,4 @@
+import AppKit
 import BarkCore
 import CoreAudio
 import Foundation
@@ -9,9 +10,13 @@ public enum AudioApps {
         processObjects().compactMap(process)
     }
 
-    /// The call app holding audio input right now, if any (CallApps.likelyCall).
+    /// The likely call app right now, if any.
     public static func likelyCall() -> CallApp? {
-        CallApps.likelyCall(running())
+        CallApps.likelyCall(running(), appName: localizedName(forPID:))
+    }
+
+    public static func localizedName(forPID pid: Int32) -> String? {
+        NSRunningApplication(processIdentifier: pid)?.localizedName
     }
 
     static func processObject(pid: pid_t) -> AudioObjectID? {
