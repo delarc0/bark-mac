@@ -77,28 +77,39 @@ def main(eval_dir):
         prompts = json.loads(prompt_file.read_text()) if prompt_file.exists() else {}
 
         m = {"n": len(hyps)}
-        if refs and hyps:
+        short = set_name.startswith("short08")
+        if refs and hyps and not short:
             m["wer"] = jiwer.wer([norm(refs[h["id"]]) for h in hyps], [norm(h["hypothesis"]) for h in hyps])
+        if short:
+            m["empty"] = sum(1 for h in hyps if not norm(h["hypothesis"]).split())
         recalled = total = 0
         insertions = []
         prompt_terms = 0
+        none_hyps = {}
+        none_file = s6 / "results" / f"{set_name}-none-{model}.jsonl"
+        if condition != "none" and none_file.exists():
+            none_hyps = {h["id"]: h["hypothesis"] for h in load(none_file)}
         for h in hyps:
             own = terms_of(refs.get(h["id"], ""))
             hyp_words = norm(h["hypothesis"]).split()
             ref_words = norm(refs.get(h["id"], "")).split()
-            if own:
+            if own and not short:
                 recalled += sum(1 for t in own if contains(hyp_words, norm(t).split()))
                 total += len(own)
             prompt = h.get("prompt") or prompts.get(h["id"], "")
             terms = [t for t in prompt.removeprefix("Glossary: ").split(", ") if t]
             prompt_terms += len(terms)
+            none_words = norm(none_hyps.get(h["id"], "")).split()
             for term in terms:
                 term_words = norm(term).split()
                 if contains(hyp_words, term_words) and not contains(ref_words, term_words):
-                    insertions.append((h["id"], term))
+                    # The FLEURS references are abridged, so a term the unprompted run also
+                    # writes is not the prompt's doing; count those apart from the rest.
+                    insertions.append((h["id"], term, "also unprompted" if contains(none_words, term_words) else "prompt-caused"))
         if total:
             m["recall"] = (recalled, total)
         m["insertions"] = len(insertions)
+        m["insertions_caused"] = sum(1 for _, _, kind in insertions if kind == "prompt-caused")
         m["prompt_terms"] = prompt_terms
         m["p50"], m["p95"] = percentiles(sorted(h["decode_seconds"] for h in hyps))
         if set_name == "noise":
@@ -107,13 +118,11 @@ def main(eval_dir):
         insertions_by_run[(set_name, condition, model)] = insertions
         metrics[(set_name, condition, model)] = m
 
-    sets = sorted({s for s, _, _ in metrics})
-    conditions = []
-    for _, c, _ in sorted(metrics):
-        if c not in conditions:
-            conditions.append(c)
-    for set_name in sets:
-        model = next(m for s, _, m in sorted(metrics) if s == set_name)
+    pairs = sorted({(s, m) for s, _, m in metrics})
+    order = ["none", "own+40", "own+40-glossary", "own+150", "40", "none-last"]
+    conditions = [c for c in order if any(key[1] == c for key in metrics)]
+    conditions += sorted({key[1] for key in metrics} - set(conditions))
+    for set_name, model in pairs:
         base = metrics.get((set_name, "none", model)) or metrics.get((set_name, "none-last", model))
         header = f"### {set_name} on {model}"
         rows = [f"| condition | WER | delta | term recall | insertions | per 100 terms | decode p50 | p95 |",
@@ -126,9 +135,11 @@ def main(eval_dir):
             delta = f"{(m['wer'] - base['wer']) * 100:+.2f}" if "wer" in m and base and "wer" in base else "-"
             recall = f"{m['recall'][0]}/{m['recall'][1]} ({m['recall'][0] / m['recall'][1]:.0%})" if "recall" in m else "-"
             ins = m["insertions"]
-            rate = f"{ins / m['prompt_terms'] * 100:.1f}" if m["prompt_terms"] else "-"
+            ins_text = f"{m['insertions_caused']}/{ins}" if ins else "0"
+            rate = f"{m['insertions_caused'] / m['prompt_terms'] * 100:.2f}" if m["prompt_terms"] else "-"
             extra = f" ({m['non_empty']} non-empty)" if set_name == "noise" else ""
-            rows.append(f"| {condition} | {wer} | {delta} | {recall} | {ins}{extra} | {rate} | {m['p50']:.2f} | {m['p95']:.2f} |")
+            extra += f" ({m['empty']} empty)" if "empty" in m else ""
+            rows.append(f"| {condition} | {wer} | {delta} | {recall} | {ins_text}{extra} | {rate} | {m['p50']:.2f} | {m['p95']:.2f} |")
         print(header)
         print("\n".join(rows))
         print()
@@ -140,8 +151,8 @@ def main(eval_dir):
         any_insertions = True
         set_name, condition, model = key
         print(f"{set_name} / {condition} / {model}:")
-        for clip, term in insertions:
-            print(f"  {clip}: {term}")
+        for clip, term, kind in insertions:
+            print(f"  {clip}: {term} ({kind})")
     if not any_insertions:
         print("none")
     for key, spoken in sorted(spoken_on_noise.items()):
