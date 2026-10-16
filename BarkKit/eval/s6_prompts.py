@@ -61,6 +61,8 @@ def reference_words(reference):
 def build(sets, name, pool_name, condition):
     ids, refs = load_set(sets, name)
     pool_ids, pool_refs = load_set(sets, pool_name)
+    # A set without references (short08) borrows its pool set's, keyed by the same ids.
+    refs = refs or pool_refs
     own = {i: terms_of(r) for i, r in refs.items()}
     pool = []
     for i in pool_ids:
