@@ -100,16 +100,26 @@ def main(eval_dir):
             terms = [t for t in prompt.removeprefix("Glossary: ").split(", ") if t]
             prompt_terms += len(terms)
             none_words = norm(none_hyps.get(h["id"], "")).split()
+            raw_ref_words = {w.strip("\"'“”‘’.,;:!?…()[]{}<>«»").lower() for w in refs.get(h["id"], "").split()}
             for term in terms:
                 term_words = norm(term).split()
                 if contains(hyp_words, term_words) and not contains(ref_words, term_words):
-                    # The FLEURS references are abridged, so a term the unprompted run also
-                    # writes is not the prompt's doing; count those apart from the rest.
-                    insertions.append((h["id"], term, "also unprompted" if contains(none_words, term_words) else "prompt-caused"))
+                    # The FLEURS references are abridged and strip parentheticals, so classify:
+                    # the unprompted run says it too (not the prompt's doing), it is in the raw
+                    # reference (a parenthesised acronym the speaker may say), or neither (the
+                    # model wrote a prompt word that was never said).
+                    if contains(none_words, term_words):
+                        kind = "also unprompted"
+                    elif term.lower() in raw_ref_words:
+                        kind = "in reference (raw)"
+                    else:
+                        kind = "prompt-caused"
+                    insertions.append((h["id"], term, kind))
         if total:
             m["recall"] = (recalled, total)
         m["insertions"] = len(insertions)
         m["insertions_caused"] = sum(1 for _, _, kind in insertions if kind == "prompt-caused")
+        m["insertions_rawref"] = sum(1 for _, _, kind in insertions if kind == "in reference (raw)")
         m["prompt_terms"] = prompt_terms
         m["p50"], m["p95"] = percentiles(sorted(h["decode_seconds"] for h in hyps))
         if set_name == "noise":
@@ -135,7 +145,8 @@ def main(eval_dir):
             delta = f"{(m['wer'] - base['wer']) * 100:+.2f}" if "wer" in m and base and "wer" in base else "-"
             recall = f"{m['recall'][0]}/{m['recall'][1]} ({m['recall'][0] / m['recall'][1]:.0%})" if "recall" in m else "-"
             ins = m["insertions"]
-            ins_text = f"{m['insertions_caused']}/{ins}" if ins else "0"
+            rawref = m.get("insertions_rawref", 0)
+            ins_text = f"{m['insertions_caused']}" if not rawref else f"{m['insertions_caused']} (+{rawref} raw-ref)"
             rate = f"{m['insertions_caused'] / m['prompt_terms'] * 100:.2f}" if m["prompt_terms"] else "-"
             extra = f" ({m['non_empty']} non-empty)" if set_name == "noise" else ""
             extra += f" ({m['empty']} empty)" if "empty" in m else ""
