@@ -27,7 +27,6 @@ final class MeetingRecorder {
     var onMessage: ((PanelMessage) -> Void)?
     /// For the next meeting only; back to automatic once one starts.
     var nextMode = MeetingModeChoice.automatic
-    let notes = NotesModel()
     private(set) var plan: MeetingCapturePlan?
 
     private let settings: AppSettings
@@ -158,7 +157,6 @@ final class MeetingRecorder {
         warnedDeadMic = false
         warnedDisk = false
         holdIdleSleep()
-        notes.begin(session.id, store: store)
         log.info("Meeting \(session.id, privacy: .public) started: \(String(describing: plan), privacy: .public), \(language, privacy: .public)")
         state = .recording(since: .now)
         library.notifyChanged()
@@ -166,7 +164,6 @@ final class MeetingRecorder {
 
     private func finish() async {
         await detach()
-        notes.end()
         releaseIdleSleep()
         asleep = false
         guard let session else {
