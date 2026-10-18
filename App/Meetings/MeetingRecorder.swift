@@ -44,6 +44,9 @@ final class MeetingRecorder {
     private var warnedTapSilent = false
     private var warnedDeadMic = false
     private var warnedDisk = false
+    private var calendarLookup: Task<Void, Never>?
+    /// A meeting started early finds its event on a later try.
+    static let calendarRetries: [TimeInterval] = [0, 120, 360]
 
     init(settings: AppSettings, models: Models, library: MeetingLibrary) {
         self.settings = settings
@@ -160,9 +163,38 @@ final class MeetingRecorder {
         log.info("Meeting \(session.id, privacy: .public) started: \(String(describing: plan), privacy: .public), \(language, privacy: .public)")
         state = .recording(since: .now)
         library.notifyChanged()
+        lookUpCalendar(session.id, store: store, plan: plan)
+    }
+
+    /// Names the meeting after its calendar event and keeps the attendees, unless the user typed a
+    /// title first. Tries again twice for a meeting started before its event.
+    private func lookUpCalendar(_ id: UUID, store: MeetingStore, plan: MeetingCapturePlan) {
+        calendarLookup?.cancel()
+        guard library.calendar.isConnected else { return }
+        let app: CallApp? = if case .app(let app, _) = plan { app } else { nil }
+        calendarLookup = Task { [weak self] in
+            var last: TimeInterval = 0
+            for delay in Self.calendarRetries {
+                guard (try? await Task.sleep(for: .seconds(delay - last))) != nil else { return }
+                last = delay
+                guard let self, let event = await library.calendar.match(for: app) else { continue }
+                do {
+                    try store.setCalendarEvent(id, try event.encoded())
+                    if let title = event.title, !title.isEmpty, try store.meeting(id)?.title == nil {
+                        try store.setTitle(id, title)
+                    }
+                } catch {
+                    log.error("Keeping the calendar event failed: \(String(describing: error), privacy: .public)")
+                }
+                library.notifyChanged()
+                return
+            }
+        }
     }
 
     private func finish() async {
+        calendarLookup?.cancel()
+        calendarLookup = nil
         await detach()
         releaseIdleSleep()
         asleep = false

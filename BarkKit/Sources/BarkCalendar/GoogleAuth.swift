@@ -135,9 +135,9 @@ public actor GoogleAuth {
         let expiresAt: Date
     }
 
-    public let client: GoogleClient
+    public nonisolated let client: GoogleClient
     let endpoints: GoogleEndpoints
-    private let tokens: any CalendarTokenStore
+    private nonisolated let tokens: any CalendarTokenStore
     private let session: URLSession
     private let now: @Sendable () -> Date
     private var pending: Flow?
@@ -160,7 +160,8 @@ public actor GoogleAuth {
         return URLSession(configuration: configuration)
     }
 
-    public var isConnected: Bool {
+    /// Synchronous: the Keychain answers at once, so the UI knows its state at launch.
+    public nonisolated var isConnected: Bool {
         ((try? tokens.token()) ?? nil) != nil
     }
 

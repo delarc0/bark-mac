@@ -50,6 +50,8 @@ targets:
         product: BarkStore
       - package: BarkKit
         product: BarkHQ
+      - package: BarkKit
+        product: BarkCalendar
       - package: Sparkle
     postBuildScripts:
       - name: Deep re-sign (unify Team IDs; stabilize TCC grants across rebuilds)
@@ -78,15 +80,22 @@ targets:
         SUFeedURL: $(BARK_FEED_URL)
         SUPublicEDKey: "xLy1zhCVvHlYyI1wHQyPWk67NxoP/u7vvPfMFe8joEY="
         SUEnableInstallerLauncherService: NO
+        # Google's public OAuth client id for the calendar (no secret exists for an iOS-type
+        # client); empty = the calendar feature is off. Its reversed form is the sign-in callback.
+        BarkGoogleClientID: $(BARK_GOOGLE_CLIENT_ID)
         # bark://hq-connected is hq's pairing callback (tasks/bark-hq-api.md).
         CFBundleURLTypes:
           - CFBundleURLName: se.lab37.bark.hq
             CFBundleURLSchemes: [bark]
+          - CFBundleURLName: se.lab37.bark.google
+            CFBundleURLSchemes: [$(BARK_GOOGLE_URL_SCHEME)]
     settings:
       base:
         PRODUCT_MODULE_NAME: Bark
         MARKETING_VERSION: "0.2.3"
         CURRENT_PROJECT_VERSION: "5"
+        BARK_GOOGLE_CLIENT_ID: ""
+        BARK_GOOGLE_URL_SCHEME: ""
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_ENTITLEMENTS: App/Bark.entitlements
         ENABLE_APP_SANDBOX: NO

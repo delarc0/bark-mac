@@ -43,6 +43,7 @@ final class NotebookModel {
         var speakers: [Int64: Speaker] = [:]
         var findingSpeakers = false
         var rejected: String?
+        var calendarEvent: CalendarEvent?
     }
 
     private(set) var rows: [Row] = []
@@ -73,6 +74,7 @@ final class NotebookModel {
 
     @ObservationIgnored private let store: MeetingStore?
     @ObservationIgnored private let hq: HQLink?
+    let calendar: CalendarLink?
     @ObservationIgnored private weak var recorder: MeetingRecorder?
     @ObservationIgnored private var previews: [UUID: String?] = [:]
     @ObservationIgnored private var notesMeetingID: UUID?
@@ -84,11 +86,13 @@ final class NotebookModel {
     init(library: MeetingLibrary) {
         store = library.store
         hq = library.hq
+        calendar = library.calendar
     }
 
-    init(store: MeetingStore) {
+    init(store: MeetingStore, calendar: CalendarLink? = nil) {
         self.store = store
         hq = nil
+        self.calendar = calendar
     }
 
     var selected: Meeting? { rows.first { $0.id == selection }?.meeting }
@@ -276,9 +280,11 @@ final class NotebookModel {
         let outbox = try? store.outboxItem(id)
         let speakers = Dictionary(uniqueKeysWithValues: ((try? store.speakers(id)) ?? []).map { ($0.id, $0) })
         let diarization = (try? store.meeting(id))?.diarization
+        let event = ((try? store.calendarEvent(id)) ?? nil).flatMap { try? CalendarEvent.decode($0) }
         let next = Detail(items: items, speakers: speakers,
                           findingSpeakers: diarization == .pending || diarization == .running,
-                          rejected: outbox?.state == .rejected ? (outbox?.lastError ?? "No reason given.") : nil)
+                          rejected: outbox?.state == .rejected ? (outbox?.lastError ?? "No reason given.") : nil,
+                          calendarEvent: event)
         if next != detail { detail = next }
     }
 

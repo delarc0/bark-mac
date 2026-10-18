@@ -15,6 +15,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let watcher = CallWatcher()
     private var panel: MenuBarPanel!
     private var meetingStartedFromOffer = false
+    private var offerGeneration = 0
     private let overlay: OverlayController
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
@@ -112,14 +113,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         switch change {
         case .offer(let app):
             guard recorder.state == .idle else { return }
-            panel.show(PanelMessage(title: "Record this call?", detail: Self.describe(app),
-                                    action: ("Record", { [weak self] in self?.startOfferedMeeting(app) }),
-                                    dismissTitle: "Not Now"), offer: true)
+            offerGeneration += 1
+            let generation = offerGeneration
+            showOffer(app, detail: Self.describe(app))
+            guard MeetingLibrary.shared.calendar.isConnected else { return }
+            Task { [weak self] in
+                guard let event = await MeetingLibrary.shared.calendar.match(for: app, timeout: CalendarLink.offerTimeout),
+                      let title = event.title, !title.isEmpty,
+                      let self, offerGeneration == generation, panel.isShowingOffer, recorder.state == .idle else { return }
+                showOffer(app, detail: app.capturesAllTabs ? "\(title) · \(Self.describe(app))" : "\(title) · \(app.name)")
+            }
         case .withdraw:
             if panel.isShowingOffer { panel.hide() }
         case .none:
             break
         }
+    }
+
+    private func showOffer(_ app: CallApp, detail: String) {
+        panel.show(PanelMessage(title: "Record this call?", detail: detail,
+                                action: ("Record", { [weak self] in self?.startOfferedMeeting(app) }),
+                                dismissTitle: "Not Now"), offer: true)
     }
 
     private func startOfferedMeeting(_ app: CallApp) {

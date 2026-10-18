@@ -81,14 +81,34 @@ private struct NotebookSpeakerLabel: View {
         .help("Name this speaker")
         .frame(width: Self.width, alignment: .leading)
         .popover(isPresented: $naming, arrowEdge: .bottom) {
-            TextField(speaker.label, text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 200)
-                .padding(12)
-                .onSubmit {
-                    model.name(speaker, draft)
-                    naming = false
+            VStack(alignment: .leading, spacing: 8) {
+                let invited = model.detail.calendarEvent?.others ?? []
+                if !invited.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(invited, id: \.email) { attendee in
+                            Button {
+                                model.name(speaker, attendee.name == attendee.email ? attendee.firstName : attendee.name)
+                                naming = false
+                            } label: {
+                                Text(attendee.name)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 3)
+                        }
+                    }
+                    Divider()
                 }
+                TextField(speaker.label, text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        model.name(speaker, draft)
+                        naming = false
+                    }
+            }
+            .frame(width: 200)
+            .padding(12)
         }
     }
 }

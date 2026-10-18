@@ -5,6 +5,7 @@ import SwiftUI
 struct MeetingsTab: View {
     @Bindable var settings: AppSettings
     @Bindable var hq: HQLink
+    var calendar: CalendarLink
     @State private var advanced = false
 
     var body: some View {
@@ -24,6 +25,29 @@ struct MeetingsTab: View {
                 Toggle("Keep your speakers' sound out of the microphone", isOn: $settings.echoCancellation).toggleStyle(.switch)
             }
             Note(text: "Applies from the next meeting.")
+            if calendar.status != .off {
+                Divider()
+                Row(label: "Google Calendar") {
+                    Text(calendarStatus)
+                }
+                HStack(spacing: 8) {
+                    if calendar.isConnected {
+                        Button("Disconnect") { calendar.disconnect() }
+                    } else {
+                        Button(calendar.connecting ? "Connecting…" : "Connect Google Calendar") { calendar.connect() }
+                            .disabled(calendar.connecting)
+                    }
+                }
+                .padding(.leading, 128)
+                if let problem = calendar.problem {
+                    Text(problem)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .padding(.leading, 128)
+                } else {
+                    Note(text: "Meetings get the name and people of the calendar event they happen in. Bark reads only the events around each meeting.")
+                }
+            }
             Divider()
             Row(label: "hq") {
                 Text(status)
@@ -58,7 +82,17 @@ struct MeetingsTab: View {
             Spacer()
         }
         .padding(.top, 4)
-        .onAppear { hq.refresh() }
+        .onAppear {
+            hq.refresh()
+            calendar.refresh()
+        }
+    }
+
+    private var calendarStatus: String {
+        switch calendar.status {
+        case .off, .notConnected: "Not connected"
+        case .connected(let email): email.map { "Connected as \($0)" } ?? "Connected"
+        }
     }
 
     private var status: String {
