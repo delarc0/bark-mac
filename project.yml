@@ -94,8 +94,9 @@ targets:
         PRODUCT_MODULE_NAME: Bark
         MARKETING_VERSION: "0.2.3"
         CURRENT_PROJECT_VERSION: "5"
-        BARK_GOOGLE_CLIENT_ID: ""
-        BARK_GOOGLE_URL_SCHEME: ""
+        # Public id of the iOS-type client "Bark Mac" in Google Cloud project lab37-bark (no secret exists).
+        BARK_GOOGLE_CLIENT_ID: 488710346777-c82vhndeljtq90vvqmd36v864adi8bbk.apps.googleusercontent.com
+        BARK_GOOGLE_URL_SCHEME: com.googleusercontent.apps.488710346777-c82vhndeljtq90vvqmd36v864adi8bbk
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_ENTITLEMENTS: App/Bark.entitlements
         ENABLE_APP_SANDBOX: NO
