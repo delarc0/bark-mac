@@ -16,6 +16,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var panel: MenuBarPanel!
     private var meetingStartedFromOffer = false
     private var offerGeneration = 0
+    private var callEnd: CallEnd?
+    private var callEndTimer: Timer?
+    private var callEndAnswered = false
     private let overlay: OverlayController
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
@@ -99,13 +102,59 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             NotebookWindowController.shared.present(selecting: recorder.meetingID,
                                                    activating: !meetingStartedFromOffer, focusNotes: true)
             meetingStartedFromOffer = false
+            watchCallEnd()
         case .finishing:
-            break
+            stopWatchingCallEnd()
         case .idle:
             meetingStartedFromOffer = false
+            stopWatchingCallEnd()
             watcher.resume()
         case .starting:
             break
+        }
+    }
+
+    /// A recorded call app that lets go of the mic has hung up: offer to stop, and stop anyway
+    /// after ten minutes of nobody answering, so an empty room is not recorded for hours.
+    private func watchCallEnd() {
+        stopWatchingCallEnd()
+        guard case .app(let app, _)? = recorder.plan else { return }
+        callEnd = CallEnd(app: app)
+        let timer = Timer(timeInterval: CallWatcher.interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pollCallEnd() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        callEndTimer = timer
+    }
+
+    private func stopWatchingCallEnd() {
+        callEndTimer?.invalidate()
+        callEndTimer = nil
+        callEnd = nil
+        callEndAnswered = false
+    }
+
+    private func pollCallEnd() {
+        guard callEnd != nil, case .recording = recorder.state else { return }
+        let now = Date.now
+        switch callEnd!.observe(AudioApps.running(), at: now) {
+        case .ended:
+            guard !callEndAnswered else { return }
+            panel.show(PanelMessage(title: "The call ended",
+                                    detail: "Bark is still recording. It stops by itself in 10 minutes.",
+                                    action: ("Stop Recording", { [weak self] in self?.recorder.stop() }),
+                                    dismissTitle: "Keep Recording",
+                                    onDismiss: { [weak self] in self?.callEndAnswered = true }))
+        case .resumed:
+            callEndAnswered = false
+            if !panel.isShowingOffer { panel.hide() }
+        case .none:
+            if !callEndAnswered, callEnd!.shouldStop(at: now) {
+                callEndAnswered = true
+                recorder.stop()
+                panel.show(PanelMessage(title: "Meeting stopped",
+                                        detail: "The call ended 10 minutes ago. The transcript and your notes are kept."))
+            }
         }
     }
 

@@ -227,3 +227,59 @@ struct TranscriptTextTests {
         #expect(text == "[0:00] Me: Hej, hör ni mig?\n[1:05] Them: Ja.\n[1:01:40] Rummet.")
     }
 }
+
+struct CallEndTests {
+    let zoom = CallApp(name: "Zoom", bundleIDs: ["us.zoom.xos"])
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func process(_ bundle: String, input: Bool) -> AudioProcess {
+        AudioProcess(objectID: 1, pid: 100, bundleID: bundle, runningInput: input, runningOutput: true)
+    }
+
+    @Test func aLiveCallIsNeverEnded() {
+        var end = CallEnd(app: zoom)
+        for seconds in stride(from: 0, through: 1200, by: 5) {
+            #expect(end.observe([process("us.zoom.xos", input: true)], at: start.addingTimeInterval(TimeInterval(seconds))) == .none)
+        }
+        #expect(!end.shouldStop(at: start.addingTimeInterval(1200)))
+    }
+
+    @Test func endedOnceAfterTheAppReleasesTheMicForThirtySeconds() {
+        var end = CallEnd(app: zoom)
+        #expect(end.observe([process("us.zoom.xos", input: true)], at: start) == .none)
+        #expect(end.observe([process("us.zoom.xos", input: false)], at: start.addingTimeInterval(5)) == .none)
+        #expect(end.observe([], at: start.addingTimeInterval(34)) == .none)
+        #expect(end.observe([], at: start.addingTimeInterval(35)) == .ended)
+        #expect(end.hasEnded)
+        #expect(end.observe([], at: start.addingTimeInterval(40)) == .none)
+        #expect(!end.shouldStop(at: start.addingTimeInterval(604)))
+        #expect(end.shouldStop(at: start.addingTimeInterval(605)))
+    }
+
+    @Test func inputComingBackResumesAndStartsOver() {
+        var end = CallEnd(app: zoom)
+        #expect(end.observe([], at: start) == .none)
+        #expect(end.observe([], at: start.addingTimeInterval(30)) == .ended)
+        #expect(end.observe([process("us.zoom.xos.helper", input: true)], at: start.addingTimeInterval(35)) == .resumed)
+        #expect(!end.hasEnded)
+        #expect(end.observe([], at: start.addingTimeInterval(40)) == .none)
+        #expect(end.observe([], at: start.addingTimeInterval(69)) == .none)
+        #expect(end.observe([], at: start.addingTimeInterval(70)) == .ended)
+        #expect(!end.shouldStop(at: start.addingTimeInterval(100)))
+    }
+
+    @Test func aBriefDropoutBeforeThirtySecondsIsNothing() {
+        var end = CallEnd(app: zoom)
+        #expect(end.observe([], at: start) == .none)
+        #expect(end.observe([process("us.zoom.xos", input: true)], at: start.addingTimeInterval(20)) == .none)
+        #expect(end.observe([], at: start.addingTimeInterval(25)) == .none)
+        #expect(end.observe([], at: start.addingTimeInterval(50)) == .none)
+        #expect(end.observe([], at: start.addingTimeInterval(55)) == .ended)
+    }
+
+    @Test func anotherAppsMicDoesNotCount() {
+        var end = CallEnd(app: zoom)
+        #expect(end.observe([process("com.tinyspeck.slackmacgap", input: true)], at: start) == .none)
+        #expect(end.observe([process("com.tinyspeck.slackmacgap", input: true)], at: start.addingTimeInterval(30)) == .ended)
+    }
+}

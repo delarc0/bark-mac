@@ -7,6 +7,8 @@ struct PanelMessage {
     var detail: String?
     var action: (title: String, run: @MainActor () -> Void)?
     var dismissTitle = "Dismiss"
+    /// Runs when either button closes the panel, not when it is hidden for another message.
+    var onDismiss: (@MainActor () -> Void)?
 }
 
 /// A small panel under the status item that never takes focus from the call, like a notification.
@@ -33,7 +35,10 @@ final class MenuBarPanel {
 
     func show(_ message: PanelMessage, offer: Bool = false) {
         isShowingOffer = offer
-        let view = PanelView(message: message) { [weak self] in self?.hide() }
+        let view = PanelView(message: message) { [weak self] in
+            self?.hide()
+            message.onDismiss?()
+        }
         let host = FirstClickHostingView(rootView: view)
         let size = host.fittingSize
         let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))

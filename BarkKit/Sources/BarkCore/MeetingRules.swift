@@ -89,6 +89,53 @@ public struct CallOffers: Sendable {
     }
 }
 
+/// Whether the call a meeting records has ended: its app has held no audio input for a while.
+/// Polled like CallOffers. `ended` is reported once; input coming back reports `resumed` and starts
+/// over. `shouldStop` is for a meeting nobody answered for: the room is not recorded for hours.
+public struct CallEnd: Sendable, Equatable {
+    public enum Change: Sendable, Equatable {
+        case none, ended, resumed
+    }
+
+    public static let offerAfter: TimeInterval = 30
+    public static let stopAfter: TimeInterval = 600
+
+    private let app: CallApp
+    private let offerAfter: TimeInterval
+    private let stopAfter: TimeInterval
+    private var silentSince: Date?
+    private var ended = false
+
+    public init(app: CallApp, offerAfter: TimeInterval = CallEnd.offerAfter, stopAfter: TimeInterval = CallEnd.stopAfter) {
+        self.app = app
+        self.offerAfter = offerAfter
+        self.stopAfter = stopAfter
+    }
+
+    public var hasEnded: Bool { ended }
+
+    public mutating func observe(_ processes: [AudioProcess], at now: Date) -> Change {
+        let live = processes.contains { $0.runningInput && app.owns($0.bundleID) }
+        if live {
+            silentSince = nil
+            guard ended else { return .none }
+            ended = false
+            return .resumed
+        }
+        let since = silentSince ?? now
+        silentSince = since
+        guard !ended, now.timeIntervalSince(since) >= offerAfter else { return .none }
+        ended = true
+        return .ended
+    }
+
+    /// True once the call has been over for `stopAfter`.
+    public func shouldStop(at now: Date) -> Bool {
+        guard ended, let since = silentSince else { return false }
+        return now.timeIntervalSince(since) >= stopAfter
+    }
+}
+
 /// How long a finished meeting's audio is kept. Transcripts and notes are always kept.
 public enum AudioRetention: Int, Sendable, CaseIterable {
     case week = 7
