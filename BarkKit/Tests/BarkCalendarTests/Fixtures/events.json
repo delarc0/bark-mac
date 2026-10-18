@@ -1,0 +1,52 @@
+{
+  "kind": "calendar#events",
+  "summary": "erik@example.test",
+  "items": [
+    {
+      "id": "weekly-1",
+      "status": "confirmed",
+      "summary": "Weekly with Tegen",
+      "start": { "dateTime": "2027-01-15T08:50:00+01:00", "timeZone": "Europe/Stockholm" },
+      "end": { "dateTime": "2027-01-15T09:30:00+01:00", "timeZone": "Europe/Stockholm" },
+      "attendees": [
+        { "email": "erik@example.test", "self": true, "responseStatus": "accepted" },
+        { "email": "anna@example.test", "displayName": "Anna Svensson", "organizer": true, "responseStatus": "accepted" },
+        { "email": "room-3@resource.calendar.google.com", "displayName": "Room 3", "resource": true, "responseStatus": "accepted" },
+        { "email": "johan@example.test", "displayName": "Johan Berg", "responseStatus": "tentative" }
+      ],
+      "location": "https://zoom.us/j/123456",
+      "hangoutLink": "https://meet.google.com/abc-defg-hij",
+      "conferenceData": { "entryPoints": [ { "entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij" } ] }
+    },
+    {
+      "id": "focus-1",
+      "status": "confirmed",
+      "summary": "Focus",
+      "start": { "dateTime": "2027-01-15T08:00:00+01:00" },
+      "end": { "dateTime": "2027-01-15T10:00:00+01:00" },
+      "transparency": "transparent"
+    },
+    {
+      "id": "birthday-1",
+      "status": "confirmed",
+      "summary": "Mum's birthday",
+      "start": { "date": "2027-01-15" },
+      "end": { "date": "2027-01-16" }
+    },
+    {
+      "id": "cancelled-1",
+      "status": "cancelled",
+      "summary": "Old sync",
+      "start": { "dateTime": "2027-01-15T11:00:00+01:00" },
+      "end": { "dateTime": "2027-01-15T11:30:00+01:00" }
+    },
+    {
+      "id": "fraction-1",
+      "status": "confirmed",
+      "summary": "Fractional",
+      "start": { "dateTime": "2027-01-15T08:00:00.000Z" },
+      "end": { "dateTime": "2027-01-15T08:15:00.000Z" },
+      "attendees": [ { "email": "", "displayName": "Nobody" } ]
+    }
+  ]
+}

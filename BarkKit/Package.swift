@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "BarkCapture", targets: ["BarkCapture"]),
         .library(name: "BarkStore", targets: ["BarkStore"]),
         .library(name: "BarkHQ", targets: ["BarkHQ"]),
+        .library(name: "BarkCalendar", targets: ["BarkCalendar"]),
     ],
     dependencies: [
         // Spike tools only (bark-eval, stream-eval): the WhisperKit/CoreML engine Bark2 replaces.
@@ -34,11 +35,14 @@ let package = Package(
         // SQLite and AVFoundation from the SDK only.
         .target(name: "BarkStore"),
         // Foundation and Security from the SDK only.
-        .target(name: "BarkHQ", dependencies: ["BarkStore"]),
+        .target(name: "BarkHQ", dependencies: ["BarkStore", "BarkCore"]),
+        // Foundation, Security and CryptoKit from the SDK only.
+        .target(name: "BarkCalendar", dependencies: ["BarkCore"]),
         .testTarget(name: "BarkCoreTests", dependencies: ["BarkCore"]),
         .testTarget(name: "BarkCaptureTests", dependencies: ["BarkCapture"]),
         .testTarget(name: "BarkStoreTests", dependencies: ["BarkStore"]),
         .testTarget(name: "BarkHQTests", dependencies: ["BarkHQ", "BarkStore"], exclude: ["Fixtures"]),
+        .testTarget(name: "BarkCalendarTests", dependencies: ["BarkCalendar", "BarkCore"], exclude: ["Fixtures"]),
         .testTarget(name: "BarkEngineTests", dependencies: ["BarkEngine", "BarkStore", .product(name: "MLX", package: "mlx-swift")]),
         .executableTarget(
             name: "mlx-eval",
