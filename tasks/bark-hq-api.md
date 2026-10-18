@@ -97,6 +97,11 @@ Body:
 | `gaps[]` | array | Where audio is missing or untranscribed. |
 | `gaps[].at_s` | number | Seconds from `started_at`. |
 | `gaps[].reason` | string | For example `sleep`, `decode failed`. |
+| `calendar_event` | object or null | The Google Calendar event Bark matched the meeting to, or null (no calendar connected, or no event around the time). Added 2026-10-18, additive to v1. |
+| `calendar_event.id` | string | Google's event id. |
+| `calendar_event.title` | string or null | The event's title. Bark also uses it as `meeting.title` unless the user typed one. |
+| `calendar_event.start`, `end` | string, ISO 8601 UTC | The event's scheduled times (the meeting's own times are in `meeting`). |
+| `calendar_event.attendees[]` | array | The invitees, rooms left out. `name` is the display name or, failing that, the email; `self` marks the Bark user; `organizer` the event's organizer; `response` is Google's `accepted`, `declined`, `tentative`, `needsAction` or null. |
 | `app_version` | string | Bark's version and build, e.g. `1.0.0 (42)`. |
 
 Example:
@@ -124,6 +129,16 @@ Example:
   "gaps": [
     { "at_s": 1520.5, "reason": "sleep" }
   ],
+  "calendar_event": {
+    "id": "7q3k9v2m1p8d4s6f0a5h2j7n1b",
+    "title": "Weekly sync",
+    "start": "2026-10-15T09:00:00Z",
+    "end": "2026-10-15T09:45:00Z",
+    "attendees": [
+      { "name": "Erik", "email": "erik@example.test", "self": true, "organizer": true, "response": "accepted" },
+      { "name": "Anna Svensson", "email": "anna@example.test", "self": false, "organizer": false, "response": "accepted" }
+    ]
+  },
   "app_version": "1.0.0 (42)"
 }
 ```

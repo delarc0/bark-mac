@@ -56,6 +56,31 @@ public struct CalendarEvent: Codable, Sendable, Equatable {
         self.end = end
         self.attendees = attendees
     }
+
+    /// Everyone but the user and the rooms.
+    public var others: [CalendarAttendee] { attendees.filter { !$0.isSelf && !$0.isResource } }
+
+    /// The JSON the store keeps: ISO 8601 times, readable by any tool.
+    public func encoded() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .sortedKeys
+        return try encoder.encode(self)
+    }
+
+    public static func decode(_ data: Data) throws -> CalendarEvent {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(CalendarEvent.self, from: data)
+    }
+}
+
+extension CalendarAttendee {
+    /// "Anna" for "Anna Svensson", "anna" for a bare "anna@example.test".
+    public var firstName: String {
+        if name.contains("@"), let local = name.split(separator: "@").first { return String(local) }
+        return name.split(separator: " ").first.map(String.init) ?? name
+    }
 }
 
 public struct CalendarCandidate: Sendable, Equatable {

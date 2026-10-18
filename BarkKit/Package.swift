@@ -41,7 +41,7 @@ let package = Package(
         .testTarget(name: "BarkCoreTests", dependencies: ["BarkCore"]),
         .testTarget(name: "BarkCaptureTests", dependencies: ["BarkCapture"]),
         .testTarget(name: "BarkStoreTests", dependencies: ["BarkStore"]),
-        .testTarget(name: "BarkHQTests", dependencies: ["BarkHQ", "BarkStore"], exclude: ["Fixtures"]),
+        .testTarget(name: "BarkHQTests", dependencies: ["BarkHQ", "BarkStore", "BarkCore"], exclude: ["Fixtures"]),
         .testTarget(name: "BarkCalendarTests", dependencies: ["BarkCalendar", "BarkCore"], exclude: ["Fixtures"]),
         .testTarget(name: "BarkEngineTests", dependencies: ["BarkEngine", "BarkStore", .product(name: "MLX", package: "mlx-swift")]),
         .executableTarget(

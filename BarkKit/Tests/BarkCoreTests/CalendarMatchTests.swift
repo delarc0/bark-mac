@@ -129,6 +129,21 @@ struct CalendarMatchTests {
         #expect(CalendarMatch.bestEvent(from: [meet, people], at: now, for: nil)?.id == "people")
     }
 
+    @Test func eventJSONRoundTripsWithISOTimes() throws {
+        let event = CalendarEvent(id: "evt", title: "Weekly", start: now, end: now.addingTimeInterval(1800),
+                                  attendees: [attendee("Erik", email: "erik@example.test", self: true), attendee()])
+        let data = try event.encoded()
+        #expect(String(decoding: data, as: UTF8.self).contains("\"start\":\"2027-01-15T08:00:00Z\""))
+        #expect(try CalendarEvent.decode(data) == event)
+        #expect(event.others.map(\.name) == ["Anna Example"])
+    }
+
+    @Test func firstNamesComeFromTheNameOrTheEmail() {
+        #expect(attendee("Anna Svensson").firstName == "Anna")
+        #expect(attendee("anna@example.test").firstName == "anna")
+        #expect(attendee("Cher").firstName == "Cher")
+    }
+
     @Test func storedAttendeeEncodingOmitsResourceFlag() throws {
         let data = try JSONEncoder().encode(attendee(resource: true))
         let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])

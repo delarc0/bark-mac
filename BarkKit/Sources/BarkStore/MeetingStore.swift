@@ -177,6 +177,8 @@ public final class MeetingStore: Sendable {
         ALTER TABLE meetings ADD COLUMN diarization TEXT CHECK (diarization IN ('pending', 'running', 'done', 'failed'));
         UPDATE meetings SET diarization = 'pending' WHERE status = 'done' AND audio_deleted_at IS NULL;
         """,
+        // v4: the calendar event a meeting was matched to, as JSON (BarkCore CalendarEvent).
+        "ALTER TABLE meetings ADD COLUMN calendar_event TEXT;",
     ]
 
     public init(root: URL = MeetingStore.defaultRoot) throws {
@@ -243,6 +245,16 @@ public final class MeetingStore: Sendable {
 
     public func setTitle(_ id: UUID, _ title: String?) throws {
         try db.run("UPDATE meetings SET title = ? WHERE id = ?", [title, id.uuidString])
+    }
+
+    /// The calendar event the meeting belongs to, as JSON; nil clears it.
+    public func setCalendarEvent(_ id: UUID, _ json: Data?) throws {
+        try db.run("UPDATE meetings SET calendar_event = ? WHERE id = ?", [json.map { String(decoding: $0, as: UTF8.self) }, id.uuidString])
+    }
+
+    public func calendarEvent(_ id: UUID) throws -> Data? {
+        try db.query("SELECT calendar_event FROM meetings WHERE id = ?", [id.uuidString]) { $0.optionalText(0).map { Data($0.utf8) } }
+            .first ?? nil
     }
 
     public func setStatus(_ id: UUID, _ status: MeetingStatus, endedAt: Date? = nil) throws {
