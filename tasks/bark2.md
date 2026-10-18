@@ -120,12 +120,26 @@ below hold the numbers.
   meeting still go to KB.
 - Speakers: diarization after the meeting is done (S5: pyannote community-1
   through FluidAudio's offline pipeline, models bundled); a call's mic is Me,
-  never diarized. Names from calendar attendees once P3 exists, confirmed by
-  the user; until then the user names a speaker with one click.
-- Detect and offer: in P2 on the audio signal alone (a known call app or a
-  browser holds the mic); P3 adds calendar enrichment. Call-app list named in
-  code; tapping a browser captures every tab, and the UI says so. Never
-  auto-records.
+  never diarized. The user names a speaker with one click; when the meeting
+  has a calendar event, its invitees are the one-click choices.
+- Calendar (Erik 2026-10-18: yes, Google only, never Apple Calendar): Bark
+  talks to the Google Calendar API itself, read-only, one sign-in and nothing
+  to fill in. At meeting start (and 2 and 6 min in, for a meeting started
+  early) it fetches the events 3 h back to 1 h ahead on the calendars the user
+  shows in Google Calendar and keeps the one the meeting is in (CalendarMatch:
+  timed, not declined, free time only with other people, from 10 min before
+  start to the end; a conference link that fits the recorded app wins, then
+  events with other people, then the closest start). The event names an
+  untitled meeting, its invitees show on the meeting line and go to hq as
+  `calendar_event`. The call offer shows the event's title when the calendar
+  answers within 3 s. Nothing else is read or kept. The app ships only a
+  public client id (iOS-type client: PKCE, no secret); the refresh token
+  lives in the Keychain.
+- Detect and offer: on the audio signal alone. A known call app or a browser
+  holding the mic is offered at once; any other app holding the mic and
+  playing audio on two polls 5 s apart is offered too (Bark, macOS services,
+  dictation apps and audio tools never). Tapping a browser captures every
+  tab, and the UI says so. Never auto-records.
 - Durability (losing a client meeting is the worst failure):
   - audio appended to disk per stream as captured, never held in RAM;
   - segments committed to SQLite as they are decoded;
@@ -139,16 +153,23 @@ below hold the numbers.
   slowest team Mac, on battery. Targets: final transcript within 2 minutes of
   stop, app responsive throughout; ANE/CPU load, thermal state, battery drain
   and peak memory recorded.
-- Notepad: the user's own notes during the call, kept apart from agent output.
-  UI decided on rendered mockups with Erik before building.
+- Notebook (Erik 2026-10-16: flawless, Granola level or better): one window,
+  recent meetings in a sidebar grouped like Apple Notes, each meeting a page
+  with an editable title, the date and invitees, the user's notes (plain
+  Markdown stored as typed, styled live: headings, bullets, checkboxes) and the
+  transcript folded under them; narrow, it sits beside a call. The notes are
+  the user's own, kept apart from anything hq's agent writes. Rule agreed:
+  Bark owns the notes until hq has meeting pages; then hq is their home and
+  Bark shows them read-only with an Open in hq button.
 - Store: SQLite on the Mac (meetings, segments, speakers, notes). Audio kept
   locally for a retention period Erik picks, so a better model can re-run it.
 - Dictation's "never on disk" invariant stays scoped to dictation.
 
 ### hq
 - Bark to hq: authenticated HTTPS API, per-device token in the Keychain.
-  Push: finished meeting (transcript segments, speakers, user notes, attendees,
-  calendar event id). Pull: upcoming calendar meetings, vocabulary.
+  Push: finished meeting (transcript segments, speakers, user notes, the
+  matched calendar event with its invitees). Pull: vocabulary (S6 says not
+  yet: prompting costs WER on read speech; revisit with Erik's own clips).
 - hq to agents: hq serves MCP tools over meetings (search, get, action items)
   for Claude and teammates.
 - On arrival, hq's agent writes the summary, links the client and proposes
@@ -277,7 +298,9 @@ Each one bit Bark once. Each gets a test or an eval case.
   Support/Bark/publish/` with checksums verified against ModelStore.swift;
   publishing is `BARK_PUBLISH_GO=1 BarkKit/scripts/publish-models.sh --upload`
   then `--apply-urls`. Gates P1.
-- Which hq receives meetings.
+- Which hq receives meetings (the lab-hq rebuild is the likely home; its
+  `/api/bark` endpoints are not built yet, `tasks/bark-hq-api.md` is the
+  contract).
 - Mockup approvals: notch preview, notepad, meeting view.
 - Audio retention period for meetings. Proposed default so the build does not
   wait: audio 30 days, transcripts kept.
