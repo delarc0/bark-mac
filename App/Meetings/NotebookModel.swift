@@ -184,14 +184,40 @@ final class NotebookModel {
         }
     }
 
-    func copyTranscript() {
-        let lines = detail.items.compactMap { item -> TranscriptText.Line? in
+    private var transcriptLines: [TranscriptText.Line] {
+        detail.items.compactMap { item -> TranscriptText.Line? in
             guard case .segment(let segment) = item else { return nil }
             return TranscriptText.Line(label: speaker(of: segment)?.displayName ?? segment.stream.label,
                                        start: segment.start, text: segment.text)
         }
+    }
+
+    func copyTranscript() {
+        copy(TranscriptText.plain(transcriptLines))
+    }
+
+    func copyNotes() {
+        flushNotes()
+        copy(notesText)
+    }
+
+    /// Title, when, who, the notes and the transcript as Markdown, for pasting into anything.
+    func copyMeeting() {
+        guard let meeting = selected else { return }
+        flushNotes()
+        var meta = [meeting.startedAt.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year().hour().minute())]
+        if meeting.status.isFinished {
+            meta.append(Duration.seconds(max(0, meeting.duration)).formatted(.units(allowed: [.hours, .minutes], width: .abbreviated)))
+        }
+        if let others = detail.calendarEvent?.others, !others.isEmpty {
+            meta.append(others.map(\.name).joined(separator: ", "))
+        }
+        copy(TranscriptText.markdown(title: displayTitle(for: meeting), meta: meta, notes: notesText, lines: transcriptLines))
+    }
+
+    private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(TranscriptText.plain(lines), forType: .string)
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     func rename(_ title: String, for id: UUID) {

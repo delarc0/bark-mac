@@ -196,4 +196,18 @@ public enum TranscriptText {
             return "[\(timestamp(line.start))] " + (line.label.map { "\($0): " } ?? "") + text
         }.joined(separator: "\n")
     }
+
+    /// The whole meeting as Markdown for pasting elsewhere: title, a meta line (already formatted
+    /// by the caller), the notes as typed, the transcript. Empty parts are left out.
+    public static func markdown(title: String, meta: [String], notes: String?, lines: [Line]) -> String {
+        var parts = ["# " + title.trimmingCharacters(in: .whitespacesAndNewlines)]
+        let meta = meta.filter { !$0.isEmpty }
+        if !meta.isEmpty { parts.append(meta.joined(separator: " · ")) }
+        if let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
+            parts.append("## Notes\n\n" + notes)
+        }
+        let transcript = plain(lines)
+        if !transcript.isEmpty { parts.append("## Transcript\n\n" + transcript) }
+        return parts.joined(separator: "\n\n") + "\n"
+    }
 }

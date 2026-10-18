@@ -309,11 +309,16 @@ private struct NotebookDetail: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button(action: model.copyTranscript) {
+                Menu {
+                    Button("Copy Notes", action: model.copyNotes)
+                        .disabled(model.notesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Copy Transcript", action: model.copyTranscript)
+                        .disabled(model.transcriptCount == 0)
+                    Button("Copy Meeting", action: model.copyMeeting)
+                } label: {
                     Image(systemName: "doc.on.doc")
                 }
-                .help("Copy Transcript")
-                .disabled(model.transcriptCount == 0)
+                .help("Copy")
                 Button(action: delete) {
                     Image(systemName: "trash")
                 }

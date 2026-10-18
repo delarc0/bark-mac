@@ -226,6 +226,14 @@ struct TranscriptTextTests {
         ])
         #expect(text == "[0:00] Me: Hej, hör ni mig?\n[1:05] Them: Ja.\n[1:01:40] Rummet.")
     }
+
+    @Test func markdownHasTheMeetingInOrderAndSkipsEmptyParts() {
+        let full = TranscriptText.markdown(title: " Weekly ", meta: ["Sun 18 Oct, 17:12", "", "42 min", "Anna, Johan"],
+                                           notes: "- Budget agreed\n[ ] Book the shoot\n",
+                                           lines: [.init(label: "Me", start: 1, text: "Hej"), .init(label: "Anna", start: 4, text: " ")])
+        #expect(full == "# Weekly\n\nSun 18 Oct, 17:12 · 42 min · Anna, Johan\n\n## Notes\n\n- Budget agreed\n[ ] Book the shoot\n\n## Transcript\n\n[0:01] Me: Hej\n")
+        #expect(TranscriptText.markdown(title: "Bare", meta: [], notes: "  ", lines: []) == "# Bare\n")
+    }
 }
 
 struct CallEndTests {
