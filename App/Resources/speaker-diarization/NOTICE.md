@@ -1,5 +1,12 @@
 # Attribution and license scope
 
+Bark's note: this folder holds the Community-1 artifacts Bark ships (Segmentation,
+FBank, Embedding, PldaRho and plda-parameters.json) from FluidAudio 0.17.7, with
+FluidAudio's notice below unchanged. The provenance.json, README.md and legacy
+artifacts it mentions are in that package, not in Bark. Bark credits pyannote,
+WeSpeaker, BUT Speech@FIT and Fluid Inference in Settings, General, and links
+CC-BY-4.0 there; the files are modified Core ML conversions.
+
 This is a mixed-license-scope repository. Fluid Inference intends the included
 CC-BY-4.0 license text to cover only the following exact Community-1-derived
 artifacts and their uncompiled counterparts listed in `provenance.json`:

@@ -1,6 +1,7 @@
 @testable import BarkCalendar
 import BarkCore
 import Foundation
+import Synchronization
 import Testing
 
 struct GoogleEventsDecodingTests {
@@ -106,14 +107,28 @@ struct GoogleCalendarTests {
 
     @Test func aDeadAccessTokenIsRefreshedOnceOn401() async throws {
         let google = StubGoogle()
+        let issued = Mutex(0)
         google.respond { request in
-            if request.path.hasSuffix("/token") { return (200, tokenJSON(access: "access-\(UUID().uuidString.prefix(4))", refresh: nil)) }
-            return request.request.value(forHTTPHeaderField: "Authorization") == "Bearer access-dead" ? (401, "") : (200, #"{"id": "erik@example.test"}"#)
+            if request.path.hasSuffix("/token") {
+                let n = issued.withLock { $0 += 1; return $0 }
+                return (200, tokenJSON(access: n == 1 ? "access-dead" : "access-live", refresh: nil))
+            }
+            return request.request.value(forHTTPHeaderField: "Authorization") == "Bearer access-live" ? (200, #"{"id": "erik@example.test"}"#) : (401, "")
         }
         let auth = GoogleAuth(client: testClient, tokens: MemoryTokens("refresh-0"), endpoints: google.endpoints, session: google.session)
         let calendar = GoogleCalendar(auth: auth, session: google.session)
-        _ = try await calendar.account()
-        #expect(google.requests.filter { $0.path.hasSuffix("/token") }.count == 1)
+        #expect(try await calendar.account().email == "erik@example.test")
+        #expect(google.requests.filter { $0.path.hasSuffix("/token") }.count == 2)
+        #expect(google.requests.filter { $0.path.hasSuffix("/calendarList/primary") }.map { $0.request.value(forHTTPHeaderField: "Authorization") }
+                == ["Bearer access-dead", "Bearer access-live"])
+        #expect(try await auth.accessToken() == "access-live")
+    }
+
+    @Test func aSecond401IsAnError() async throws {
+        let google = StubGoogle()
+        google.respond { request in request.path.hasSuffix("/token") ? (200, tokenJSON(refresh: nil)) : (401, "") }
+        let calendar = connected(google)
+        await #expect(throws: CalendarError.server(401)) { try await calendar.account() }
     }
 
     @Test func serverFailuresSurfaceAsErrors() async throws {

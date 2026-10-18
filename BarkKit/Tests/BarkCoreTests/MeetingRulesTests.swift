@@ -52,6 +52,25 @@ struct MeetingCapturePlanTests {
 }
 
 struct CallOffersTests {
+    @Test func siblingHelpersUnderOneAppCountAsThatApp() {
+        var offers = CallOffers()
+        let processes = [AudioProcess(objectID: 1, pid: 1, bundleID: "com.acme.call.capture", runningInput: true, runningOutput: false),
+                         AudioProcess(objectID: 2, pid: 2, bundleID: "com.acme.call.playback", runningInput: false, runningOutput: true)]
+        #expect(offers.observe(processes) == .none)
+        let change = offers.observe(processes)
+        guard case .offer(let app) = change else {
+            Issue.record("no offer, got \(change)")
+            return
+        }
+        #expect(app.bundleIDs == ["com.acme.call"])
+        #expect(CallApps.processes(of: app, in: processes).map(\.pid) == [1, 2])
+        let unrelated = [AudioProcess(objectID: 1, pid: 1, bundleID: "com.acme.capture", runningInput: true, runningOutput: false),
+                         AudioProcess(objectID: 2, pid: 2, bundleID: "com.acme.playback", runningInput: false, runningOutput: true)]
+        var other = CallOffers()
+        #expect(other.observe(unrelated) == .none)
+        #expect(other.observe(unrelated) == .none)
+    }
+
     @Test func offersACallOnceUntilItEnds() {
         var offers = CallOffers()
         let call = [process(10, "us.zoom.xos")]

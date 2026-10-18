@@ -118,15 +118,15 @@ struct NoteMarkupIndentTests {
 }
 
 struct NoteMarkupCheckboxTests {
-    @Test func clickingANestedCheckboxTogglesOnlyItsMarker() {
+    @Test func clickingANestedCheckboxTogglesOnlyItsMarker() throws {
         let text = "🐶\n  - [ ] Återkom"
         let line = NoteMarkup.lines(in: text)[1]
-        let location = try! #require(line.checkboxRange).location + 1
-        let checked = NoteMarkup.toggleCheckbox(in: text, at: location)
+        let location = try #require(line.checkboxRange).location + 1
+        let checked = try #require(NoteMarkup.toggleCheckbox(in: text, at: location)).apply(to: text)
 
-        #expect(checked?.apply(to: text) == "🐶\n  - [x] Återkom")
-        let unchecked = NoteMarkup.toggleCheckbox(in: checked!.apply(to: text), at: location)
-        #expect(unchecked?.apply(to: checked!.apply(to: text)) == text)
+        #expect(checked == "🐶\n  - [x] Återkom")
+        let unchecked = try #require(NoteMarkup.toggleCheckbox(in: checked, at: location))
+        #expect(unchecked.apply(to: checked) == text)
     }
 
     @Test func clickingOutsideTheMarkerDoesNotToggle() {

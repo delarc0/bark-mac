@@ -46,12 +46,17 @@ final class MeetingLibrary {
         guard let store else { return }
         let unfinished = (try? store.unfinished()) ?? []
         let log = log
-        Task.detached {
-            do {
-                try store.archiveLeftovers()
-            } catch {
-                log.error("Archiving leftover audio failed: \(String(describing: error), privacy: .public)")
-            }
+        // The speaker pass reads archived audio, so leftovers are archived before it may start.
+        Task {
+            await Task.detached {
+                do {
+                    try store.archiveLeftovers()
+                } catch {
+                    log.error("Archiving leftover audio failed: \(String(describing: error), privacy: .public)")
+                }
+            }.value
+            diarize()
+            if !unfinished.isEmpty { await recover(unfinished, models: models) }
         }
         expireAudio(settings)
         // A menu bar app runs for weeks; retention is applied daily, not only at launch.
@@ -66,10 +71,6 @@ final class MeetingLibrary {
         } catch {
             log.error("Reading speaker passes failed: \(String(describing: error), privacy: .public)")
         }
-        if !unfinished.isEmpty {
-            Task { await recover(unfinished, models: models) }
-        }
-        diarize()
         hq.sync()
     }
 

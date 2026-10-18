@@ -105,6 +105,7 @@ public actor GoogleCalendar {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             // 401 once: the cached token died early; refreshed and tried again.
             if status == 401, attempt == 0 {
+                await auth.invalidate(token)
                 token = try await auth.accessToken()
                 continue
             }

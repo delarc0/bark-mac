@@ -230,6 +230,11 @@ public actor GoogleAuth {
         return response.accessToken
     }
 
+    /// Google refused this access token early: the next `accessToken()` refreshes.
+    public func invalidate(_ token: String) {
+        if access?.token == token { access = nil }
+    }
+
     /// Forgets the tokens; Google is told, best effort.
     public func disconnect() async {
         pending = nil

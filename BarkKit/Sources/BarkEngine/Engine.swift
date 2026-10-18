@@ -113,6 +113,12 @@ public final class Engine: @unchecked Sendable {
         return (initial, sotIndex)
     }
 
+    /// How many tokens a decode may sample: half the context, and never past its end once a prompt
+    /// fills the front (openai-whisper stops at n_text_ctx too).
+    private func steps(after initial: [Int]) -> Int {
+        max(1, min(sampleLength, model.dims.n_text_ctx - initial.count))
+    }
+
     private func decodeWithFallback(_ features: MLXArray, initial: [Int], sotIndex: Int, allowNoSpeech: Bool, timestamps: Bool) -> Decoded {
         func run(_ t: Float) -> Decoded {
             timestamps
@@ -223,9 +229,10 @@ public final class Engine: @unchecked Sendable {
 
         var sampled: [Int] = []
         var sumLogprob: Float = 0
-        for step in 0 ..< sampleLength {
+        let steps = steps(after: initial)
+        for step in 0 ..< steps {
             var upcoming: (MLXArray, MLXArray)?
-            if step < sampleLength - 1 {
+            if step < steps - 1 {
                 let (stepLogits, nextCache) = model.decoder(pending.0.reshaped(1, 1), xa: features, cache: cache)
                 cache = nextCache
                 upcoming = sample(stepLogits[0, 0].asType(.float32), first: false)
@@ -260,7 +267,7 @@ extension Engine {
         var noSpeechProb: Float = 0
         var cache: [BlockCache]?
         var input = initial
-        for step in 0 ..< sampleLength {
+        for step in 0 ..< steps(after: initial) {
             let (out, nextCache) = model.decoder(MLXArray(input.map(Int32.init)).expandedDimensions(axis: 0), xa: features, cache: cache)
             cache = nextCache
             let all = out[0].asType(.float32)

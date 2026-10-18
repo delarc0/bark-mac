@@ -144,12 +144,12 @@ public struct Vocabulary: Sendable {
                     }
                 }
                 if best < 0 { break }
-                let merged = word[best] + word[best + 1]
+                let left = word[best], right = word[best + 1]
                 var next: [String] = []
                 var i = 0
                 while i < word.count {
-                    if i < word.count - 1, word[i] + word[i + 1] == merged {
-                        next.append(merged)
+                    if i < word.count - 1, word[i] == left, word[i + 1] == right {
+                        next.append(left + right)
                         i += 2
                     } else {
                         next.append(word[i])

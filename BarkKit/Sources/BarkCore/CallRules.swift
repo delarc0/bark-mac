@@ -197,6 +197,9 @@ public enum CallApps {
         // Firefox's content processes are not under its bundle ID.
         CallApp(name: "Firefox", bundleIDs: ["org.mozilla.firefox", "org.mozilla.plugincontainer"], capturesAllTabs: true),
         CallApp(name: "Brave", bundleIDs: ["com.brave.Browser"], capturesAllTabs: true),
+        CallApp(name: "Vivaldi", bundleIDs: ["com.vivaldi.Vivaldi"], capturesAllTabs: true),
+        CallApp(name: "Opera", bundleIDs: ["com.operasoftware.Opera"], capturesAllTabs: true),
+        CallApp(name: "Chromium", bundleIDs: ["org.chromium.Chromium"], capturesAllTabs: true),
     ]
 
     public static func app(bundleID: String?) -> CallApp? {
@@ -247,12 +250,18 @@ public enum CallApps {
         return !excludedBundleRoots.contains { isUnder(bundleID, root: $0) }
     }
 
+    /// The app both processes belong to: one is the other's ancestor, or they are siblings under
+    /// one identity of at least three parts (com.acme.call.capture and com.acme.call.playback
+    /// share com.acme.call; two apps under com.acme share nothing).
     private static func bundleRoot(_ first: String?, _ second: String?) -> String? {
         guard let first, let second else { return nil }
         let a = first.lowercased(), b = second.lowercased()
         if a == b || b.hasPrefix(a + ".") { return first }
         if a.hasPrefix(b + ".") { return second }
-        return nil
+        let shared = zip(first.split(separator: "."), second.split(separator: "."))
+            .prefix { $0.lowercased() == $1.lowercased() }
+            .map { String($0.0) }
+        return shared.count >= 3 ? shared.joined(separator: ".") : nil
     }
 
     private static func isUnder(_ bundleID: String, root: String) -> Bool {
