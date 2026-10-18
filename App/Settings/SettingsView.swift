@@ -123,6 +123,11 @@ private struct GeneralTab: View {
                 Toggle("Start Bark when you log in", isOn: $settings.launchAtLogin).toggleStyle(.switch)
             }
             Spacer()
+            // CC BY 4.0 asks for this credit; the model licences are in App/Resources/speaker-diarization/NOTICE.md.
+            Text("Voice models: KB-Whisper by KBLab (Apache 2.0) and Whisper large-v3 by OpenAI (MIT). Speaker detection: pyannote speaker-diarization-community-1 (CC BY 4.0), run with FluidAudio.")
+                .foregroundStyle(.tertiary)
+                .font(.system(size: 10))
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 4)
         .onAppear { settings.refreshLaunchAtLogin() }
@@ -201,7 +206,7 @@ private struct ModelTab: View {
             Row(label: "Swedish model") {
                 Toggle("Use kb-whisper-large for Swedish (~\(Models.size(of: Models.swedish)))", isOn: $settings.swedishModelEnabled).toggleStyle(.switch)
             }
-            Note(text: "KB-Whisper roughly halves the error rate on Swedish (4.6% vs 8.4% measured on FLEURS). It loads in the background after launch; until it is ready, Swedish runs on whisper-large-v3. Takes effect on next launch.")
+            Note(text: "KB-Whisper makes about a third fewer errors on Swedish (5.8% vs 9.4% measured on FLEURS). It loads in the background after launch; until it is ready, Swedish runs on whisper-large-v3. Takes effect on next launch.")
             LegacyModelsRow()
             Spacer()
         }
