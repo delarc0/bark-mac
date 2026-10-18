@@ -171,7 +171,7 @@ struct MeetingStoreTests {
         }
 
         let store = try MeetingStore(root: root)
-        #expect(store.schemaVersion == 3)
+        #expect(store.schemaVersion == MeetingStore.migrations.count)
         #expect(try store.meeting(done)?.diarization == .pending)
         #expect(try store.meeting(expired)?.diarization == nil)
         #expect(try store.meeting(recording)?.diarization == nil)
@@ -180,7 +180,31 @@ struct MeetingStoreTests {
         #expect(try store.segments(done).first?.speakerID != nil)
         #expect(try store.outboxItem(done) == OutboxItem(meetingID: done, state: .acknowledged, generation: 3, attempts: 0,
                                                          lastError: nil, lastAttemptAt: nil))
-        #expect(try MeetingStore(root: root).schemaVersion == 3)
+        #expect(try MeetingStore(root: root).schemaVersion == MeetingStore.migrations.count)
+    }
+
+    @Test func upgradesV3AndKeepsACalendarEvent() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let path = root.appending(path: "bark.sqlite").path
+        let done = UUID()
+        do {
+            let v3 = try Database(path: path, migrations: Array(MeetingStore.migrations.prefix(3)))
+            #expect(v3.userVersion == 3)
+            try v3.run("INSERT INTO meetings (id, started_at, language, mode, status, diarization) VALUES (?, 0, 'sv', 'call', 'done', 'done')",
+                       [done.uuidString])
+        }
+        let store = try MeetingStore(root: root)
+        #expect(store.schemaVersion == 4)
+        #expect(try store.calendarEvent(done) == nil)
+        #expect(try store.meeting(done)?.diarization == .done)
+        let json = Data(#"{"id":"evt","title":"Weekly","attendees":[]}"#.utf8)
+        try store.setCalendarEvent(done, json)
+        #expect(try store.calendarEvent(done) == json)
+        #expect(try MeetingStore(root: root).calendarEvent(done) == json)
+        try store.setCalendarEvent(done, nil)
+        #expect(try store.calendarEvent(done) == nil)
+        #expect(try store.calendarEvent(UUID()) == nil)
     }
 
     @Test func speakersAreSavedAfterTheMeetingIsDone() throws {

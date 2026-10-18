@@ -36,7 +36,7 @@ struct SettingsView: View {
             TextTab(settings: settings)
                 .tabItem { Label("Text", systemImage: "text.alignleft") }
                 .tag(SettingsTab.text)
-            MeetingsTab(settings: settings, hq: hq)
+            MeetingsTab(settings: settings, hq: hq, calendar: MeetingLibrary.shared.calendar)
                 .tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
                 .tag(SettingsTab.meetings)
         }

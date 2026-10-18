@@ -1,3 +1,4 @@
+import BarkCore
 import BarkStore
 import Foundation
 
@@ -69,14 +70,53 @@ struct MeetingPayload: Encodable {
         }
     }
 
+    struct CalendarItem: Encodable {
+        struct Attendee: Encodable {
+            let name: String
+            let email: String
+            let isSelf: Bool
+            let organizer: Bool
+            let response: String?
+
+            enum CodingKeys: String, CodingKey { case name, email, isSelf = "self", organizer, response }
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(name, forKey: .name)
+                try container.encode(email, forKey: .email)
+                try container.encode(isSelf, forKey: .isSelf)
+                try container.encode(organizer, forKey: .organizer)
+                try container.encode(response, forKey: .response)
+            }
+        }
+
+        let event: CalendarEvent
+
+        enum CodingKeys: String, CodingKey { case id, title, start, end, attendees }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(event.id, forKey: .id)
+            try container.encode(event.title, forKey: .title)
+            try container.encode(HQTime.format(event.start), forKey: .start)
+            try container.encode(HQTime.format(event.end), forKey: .end)
+            try container.encode(event.attendees.map {
+                Attendee(name: $0.name, email: $0.email, isSelf: $0.isSelf, organizer: $0.isOrganizer, response: $0.response)
+            }, forKey: .attendees)
+        }
+    }
+
     let meeting: Info
     let segments: [SegmentItem]
     let speakers: [SpeakerItem]
     let notes: String?
     let gaps: [GapItem]
+    let calendarEvent: CalendarItem?
     let appVersion: String
 
-    enum CodingKeys: String, CodingKey { case meeting, segments, speakers, notes, gaps, appVersion = "app_version" }
+    enum CodingKeys: String, CodingKey {
+        case meeting, segments, speakers, notes, gaps, calendarEvent = "calendar_event", appVersion = "app_version"
+    }
 
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -85,6 +125,7 @@ struct MeetingPayload: Encodable {
         try container.encode(speakers, forKey: .speakers)
         try container.encode(notes, forKey: .notes)
         try container.encode(gaps, forKey: .gaps)
+        try container.encode(calendarEvent, forKey: .calendarEvent)
         try container.encode(appVersion, forKey: .appVersion)
     }
 
@@ -101,6 +142,7 @@ struct MeetingPayload: Encodable {
         self.speakers = speakers.map { SpeakerItem(label: $0.label, name: $0.name) }
         notes = try store.notes(id)?.body
         gaps = try store.gaps(id).map { GapItem(at: $0.at, reason: $0.reason) }
+        calendarEvent = try store.calendarEvent(id).map { CalendarItem(event: try CalendarEvent.decode($0)) }
         self.appVersion = appVersion
     }
 

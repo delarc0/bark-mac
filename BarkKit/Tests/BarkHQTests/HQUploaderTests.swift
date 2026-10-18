@@ -1,3 +1,4 @@
+import BarkCore
 @testable import BarkHQ
 @testable import BarkStore
 import Foundation
@@ -23,8 +24,25 @@ struct HQUploaderTests {
                                      language: "sv", speakerID: anna), to: id)
         try store.setNotes(id, "Budget: fråga om Q4.\nSkicka offert på fredag.")
         try store.addGap(id, at: 1520.5, reason: "sleep")
+        let event = CalendarEvent(id: "7q3k9v2m1p8d4s6f0a5h2j7n1b", title: "Weekly sync", start: start, end: start.addingTimeInterval(45 * 60),
+                                  attendees: [CalendarAttendee(name: "Erik", email: "erik@example.test", isSelf: true, isOrganizer: true, response: "accepted"),
+                                              CalendarAttendee(name: "Anna Svensson", email: "anna@example.test", response: "accepted")])
+        try store.setCalendarEvent(id, try event.encoded())
         try store.finish(id, endedAt: start.addingTimeInterval(42 * 60 + 10))
         return id
+    }
+
+    @Test func aMeetingWithoutACalendarEventSendsNull() async throws {
+        let test = TestSettings(), server = StubServer()
+        defer { test.cleanUp(); try? FileManager.default.removeItem(at: root) }
+        try connected(server, test)
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "en", mode: .inPerson).id
+        try store.finish(id, endedAt: .now)
+        server.respond(status: 201)
+        _ = await HQUploader(store: store, settings: test.settings, appVersion: "1.0.0 (42)", session: server.session).drain()
+        let body = try #require(server.requests.first?.body)
+        #expect(String(decoding: body, as: UTF8.self).contains("\"calendar_event\":null"))
     }
 
     func connected(_ server: StubServer, _ test: TestSettings) throws {

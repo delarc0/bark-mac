@@ -16,6 +16,7 @@ final class MeetingLibrary {
     /// nil when the store cannot be opened (a store from a newer Bark, a full disk); meetings are off.
     let store: MeetingStore?
     let hq: HQLink
+    let calendar = CalendarLink()
     private let log = Logger(subsystem: "se.lab37.bark.mac", category: "Meetings")
     private var retentionTimer: Timer?
     /// nil when the bundled models are missing; meetings then wait with speakers pending.

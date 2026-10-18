@@ -20,5 +20,15 @@
   "gaps": [
     { "at_s": 1520.5, "reason": "sleep" }
   ],
+  "calendar_event": {
+    "id": "7q3k9v2m1p8d4s6f0a5h2j7n1b",
+    "title": "Weekly sync",
+    "start": "2026-10-15T09:00:00Z",
+    "end": "2026-10-15T09:45:00Z",
+    "attendees": [
+      { "name": "Erik", "email": "erik@example.test", "self": true, "organizer": true, "response": "accepted" },
+      { "name": "Anna Svensson", "email": "anna@example.test", "self": false, "organizer": false, "response": "accepted" }
+    ]
+  },
   "app_version": "1.0.0 (42)"
 }

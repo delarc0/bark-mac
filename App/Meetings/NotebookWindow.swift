@@ -145,6 +145,11 @@ private struct NotebookSidebar: View {
             delete()
             return .handled
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let calendar = model.calendar, calendar.offersConnect {
+                CalendarConnectRow(calendar: calendar)
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: model.startMeeting) {
@@ -152,6 +157,33 @@ private struct NotebookSidebar: View {
                 }
                 .help("New Meeting")
                 .disabled(!model.canStart)
+            }
+        }
+    }
+}
+
+/// One quiet line at the foot of the sidebar until the calendar is connected.
+private struct CalendarConnectRow: View {
+    let calendar: CalendarLink
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider()
+            Button(action: calendar.connect) {
+                Label(calendar.connecting ? "Connecting…" : "Connect Google Calendar", systemImage: "calendar")
+                    .font(.callout)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(calendar.connecting)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            if let problem = calendar.problem {
+                Text(problem)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
             }
         }
     }
@@ -216,7 +248,7 @@ private struct NotebookDetail: View {
                 VStack(alignment: .leading, spacing: 0) {
                     NotebookTitleField(model: model, meeting: meeting)
                         .id(meeting.id)
-                    NotebookMetaLine(model: model, meeting: meeting)
+                    NotebookMetaLine(model: model, meeting: meeting, compact: compact)
                         .padding(.top, 4)
                     if let message = model.detail.rejected {
                         NotebookRejectedNotice(message: message, retry: model.retryUpload)
@@ -331,38 +363,79 @@ private struct NotebookTitleField: View {
 private struct NotebookMetaLine: View {
     let model: NotebookModel
     let meeting: Meeting
+    let compact: Bool
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(leftText)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-            if model.isFinishing(meeting) {
-                Text("Finishing…")
-                    .foregroundStyle(.secondary)
-            } else if model.isRecording(meeting) {
-                HStack(spacing: 7) {
-                    Circle().fill(.red).frame(width: 7, height: 7)
-                    Text("Recording").foregroundStyle(.red)
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(TranscriptText.timestamp(context.date.timeIntervalSince(meeting.startedAt)))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                    Button("Stop", action: model.stopMeeting)
-                        .controlSize(.small)
-                }
+        // Narrow beside a call, the live controls take their own line rather than wrap.
+        if compact {
+            VStack(alignment: .leading, spacing: 6) {
+                info
+                if live { controls }
             }
+            .font(.callout)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                info
+                Spacer(minLength: 0)
+                if live { controls }
+            }
+            .font(.callout)
         }
-        .font(.callout)
+    }
+
+    private var live: Bool { model.isFinishing(meeting) || model.isRecording(meeting) }
+
+    private var info: some View {
+        Text(leftText)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .help(attendeesHelp)
+    }
+
+    @ViewBuilder private var controls: some View {
+        if model.isFinishing(meeting) {
+            Text("Finishing…")
+                .foregroundStyle(.secondary)
+        } else {
+            HStack(spacing: 7) {
+                Circle().fill(.red).frame(width: 7, height: 7)
+                Text("Recording").foregroundStyle(.red)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(TranscriptText.timestamp(context.date.timeIntervalSince(meeting.startedAt)))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                Button("Stop", action: model.stopMeeting)
+                    .controlSize(.small)
+            }
+            .fixedSize()
+        }
+    }
+
+    private var others: [CalendarAttendee] { model.detail.calendarEvent?.others ?? [] }
+
+    /// "Anna, Johan, Sara +2": the people invited, besides the user.
+    private var attendeesText: String? {
+        guard !others.isEmpty else { return nil }
+        let names = others.prefix(3).map(\.firstName).joined(separator: ", ")
+        return others.count > 3 ? "\(names) +\(others.count - 3)" : names
+    }
+
+    private var attendeesHelp: String {
+        others.map { $0.name == $0.email ? $0.email : "\($0.name) (\($0.email))" }.joined(separator: "\n")
     }
 
     private var leftText: String {
         let date = meeting.startedAt.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
-        guard !model.isRecording(meeting) else { return date }
-        var parts = [date, durationText(meeting.duration)]
-        if let speakers = model.speakerCount(for: meeting) {
+        var parts = [date]
+        if model.isRecording(meeting) {
+            if let attendees = attendeesText { parts.append(attendees) }
+            return parts.joined(separator: " · ")
+        }
+        parts.append(durationText(meeting.duration))
+        if let attendees = attendeesText {
+            parts.append(attendees)
+        } else if let speakers = model.speakerCount(for: meeting) {
             parts.append(speakers == 1 ? "1 speaker" : "\(speakers) speakers")
         }
         if !model.isFinishing(meeting) && (meeting.status == .recording || meeting.status == .transcribing) {

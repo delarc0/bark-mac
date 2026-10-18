@@ -1,5 +1,7 @@
 #if DEBUG
 import AppKit
+import BarkCalendar
+import BarkCore
 import BarkStore
 import Darwin
 import SwiftUI
@@ -15,7 +17,9 @@ enum NotebookSnapshot {
                 defer { try? FileManager.default.removeItem(at: temporary) }
                 let store = try MeetingStore(root: temporary)
                 let live = try populate(store)
-                let model = NotebookModel(store: store)
+                // A client that can never connect: the sidebar shows the Connect row, nothing is contacted.
+                let calendar = CalendarLink(client: GoogleClient(id: "snapshot.apps.googleusercontent.com"), tokens: NoTokens())
+                let model = NotebookModel(store: store, calendar: calendar)
                 model.reload()
                 model.selection = live
                 model.focusNotes()
@@ -98,6 +102,14 @@ enum NotebookSnapshot {
         let live = try store.createMeeting(language: "en", mode: .call, title: "Weekly with Tegen",
                                            startedAt: now.addingTimeInterval(-42 * 60))
         try store.setNotes(live.id, "# Decisions\n- Budget for Q1 agreed\n- Helena sends the brief on Friday afternoon after the client review is complete\n  * Follow up with the client\n## Actions\n[ ] Book the shoot\n- [x] Share the agenda")
+        let event = CalendarEvent(id: "fixture-weekly", title: "Weekly with Tegen", start: live.startedAt, end: live.startedAt.addingTimeInterval(3600),
+                                  attendees: [CalendarAttendee(name: "Erik Example", email: "erik@example.test", isSelf: true, isOrganizer: true, response: "accepted"),
+                                              CalendarAttendee(name: "Anna Svensson", email: "anna@example.test", response: "accepted"),
+                                              CalendarAttendee(name: "Johan Berg", email: "johan@example.test", response: "accepted"),
+                                              CalendarAttendee(name: "Sara Lind", email: "sara@example.test", response: "tentative"),
+                                              CalendarAttendee(name: "Omar Haddad", email: "omar@example.test", response: "needsAction"),
+                                              CalendarAttendee(name: "Mia Ek", email: "mia@example.test", response: "accepted")])
+        try store.setCalendarEvent(live.id, try event.encoded())
         try store.addSegment(Segment(stream: .me, start: 4, end: 9, text: "Can we agree the Q1 budget today?",
                                      model: "fixture", language: "en"), to: live.id)
         try store.addSegment(Segment(stream: .them, start: 12, end: 18, text: "Yes, the numbers look good.",
@@ -148,5 +160,11 @@ enum NotebookSnapshot {
     }
 
     private enum SnapshotError: Error { case rendering }
+
+    private struct NoTokens: CalendarTokenStore {
+        func token() throws -> String? { nil }
+        func setToken(_ token: String) throws {}
+        func deleteToken() throws {}
+    }
 }
 #endif
