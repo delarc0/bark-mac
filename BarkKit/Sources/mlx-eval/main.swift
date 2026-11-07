@@ -65,8 +65,8 @@ if let value = args["cache-limit-mb"] {
     }
 }
 
-// Where FluidAudio cached Silero for the spike tools; the app ships its own copy.
-let sileroFolder = URL.applicationSupportDirectory.appending(path: "FluidAudio/Models/silero-vad")
+// The Silero copy the app bundles.
+let sileroFolder = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../App/Resources/silero-vad")
 
 if args["meeting"] == "1" {
     guard let outPath = args["out"], let speed = Double(args["speed"] ?? "10"), let minutes = Double(args["minutes"] ?? "90"),
