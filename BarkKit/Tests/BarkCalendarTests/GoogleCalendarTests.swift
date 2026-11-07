@@ -105,6 +105,30 @@ struct GoogleCalendarTests {
         #expect(google.requests.map(\.path).filter { $0.hasSuffix("/calendarList") }.count == 2)
     }
 
+    @Test func aCalendarGoogleRefusesIsSkipped() async throws {
+        let google = StubGoogle()
+        let events = try Fixture.text("events.json")
+        google.respond { request in
+            if request.path.hasSuffix("/token") { return (200, tokenJSON(refresh: nil)) }
+            if request.path.hasSuffix("/calendarList") { return (200, Self.calendarList) }
+            if request.path.contains("/calendars/shared@group.calendar.google.com/events") { return (403, "") }
+            return (200, events)
+        }
+        let calendar = connected(google, clock: TestClock())
+        #expect(Set(try await calendar.candidates().map(\.id)) == ["weekly-1", "focus-1", "birthday-1", "fraction-1"])
+    }
+
+    @Test func aDeadTokenOnACalendarStillFailsTheLookup() async throws {
+        let google = StubGoogle()
+        google.respond { request in
+            if request.path.hasSuffix("/token") { return (200, tokenJSON(refresh: nil)) }
+            if request.path.hasSuffix("/calendarList") { return (200, Self.calendarList) }
+            return (401, "")
+        }
+        let calendar = connected(google, clock: TestClock())
+        await #expect(throws: CalendarError.server(401)) { try await calendar.candidates() }
+    }
+
     @Test func aDeadAccessTokenIsRefreshedOnceOn401() async throws {
         let google = StubGoogle()
         let issued = Mutex(0)
