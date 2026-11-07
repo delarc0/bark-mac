@@ -7,6 +7,8 @@ public enum TextCleanup {
     private static let fillerRegex = try! NSRegularExpression(
         pattern: #"\b(um|uh|uhh|uhm|erm|hmm|mhm)\b[,.]?"#, options: .caseInsensitive)
     private static let whitespaceRegex = try! NSRegularExpression(pattern: #"\s+"#)
+    // Not before a letter or digit: " .NET" and " .5" keep their space.
+    private static let spaceBeforePunctuationRegex = try! NSRegularExpression(pattern: #" ([,.?!])(?![\p{L}\p{N}])"#)
     // \p{Ll}: any Unicode lowercase letter; [a-z] misses å/ä/ö.
     private static let sentenceStartRegex = try! NSRegularExpression(pattern: #"(^|[.!?]\s+)(\p{Ll})"#)
     private static let specialTokenRegex = try! NSRegularExpression(pattern: #"<\|[^<>|]*\|>|<\|"#)
@@ -43,11 +45,7 @@ public enum TextCleanup {
     }
 
     private static func collapseWhitespace(_ text: String) -> String {
-        replace(whitespaceRegex, in: text, with: " ")
-            .replacingOccurrences(of: " ,", with: ",")
-            .replacingOccurrences(of: " .", with: ".")
-            .replacingOccurrences(of: " ?", with: "?")
-            .replacingOccurrences(of: " !", with: "!")
+        replace(spaceBeforePunctuationRegex, in: replace(whitespaceRegex, in: text, with: " "), with: "$1")
     }
 
     private static func capitalizeSentences(_ text: String) -> String {
@@ -77,8 +75,10 @@ public enum TextCleanup {
 
     private static func vocabRegex(for term: String) -> NSRegularExpression? {
         if let cached = vocabRegexCache.withLock({ $0[term] }) { return cached }
-        let escaped = NSRegularExpression.escapedPattern(for: term)
-        guard let regex = try? NSRegularExpression(pattern: #"\b"# + escaped + #"\b"#, options: .caseInsensitive) else {
+        // \b only next to a word character: "C++" and ".NET" have no boundary on their symbol side.
+        let edge = { (c: Character?) in c?.isLetter == true || c?.isNumber == true || c == "_" ? #"\b"# : "" }
+        let pattern = edge(term.first) + NSRegularExpression.escapedPattern(for: term) + edge(term.last)
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
             return nil
         }
         vocabRegexCache.withLock { cache in

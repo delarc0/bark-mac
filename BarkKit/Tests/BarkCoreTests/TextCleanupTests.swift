@@ -52,6 +52,11 @@ struct TextCleanupTests {
             == "LAB37 and the LAB. Labrador $5 \\o/")
     }
 
+    @Test func vocabularyMatchesTermsThatStartOrEndOnASymbol() {
+        let vocabulary = ["c++": "C++", ".net": ".NET"]
+        #expect(TextCleanup.process(["i write c++ and .net code"], vocabulary: vocabulary) == "I write C++ and .NET code")
+    }
+
     @Test func cleanupOffKeepsRawText() {
         #expect(TextCleanup.process(["um  hello. world"], cleanup: false) == "um  hello. world")
     }
