@@ -271,6 +271,15 @@ public final class MeetingStore: Sendable {
         }
     }
 
+    /// A meeting whose recovery failed or crashed: kept with what was transcribed, queued for hq,
+    /// never recovered again.
+    public func interrupt(_ id: UUID) throws {
+        try db.transaction {
+            try setStatus(id, .interrupted)
+            try enqueue(id)
+        }
+    }
+
     /// Deletes the meeting, its rows and its audio.
     public func delete(_ id: UUID) throws {
         try db.run("DELETE FROM meetings WHERE id = ?", [id.uuidString])

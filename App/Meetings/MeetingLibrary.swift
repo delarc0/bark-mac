@@ -18,6 +18,8 @@ final class MeetingLibrary {
     let hq: HQLink
     let calendar = CalendarLink()
     private let log = Logger(subsystem: "se.lab37.bark.mac", category: "Meetings")
+    /// The meeting being recovered right now; still set at launch means its recovery crashed Bark.
+    private static let recoveringKey = "bark2.recoveringMeeting"
     private var retentionTimer: Timer?
     /// nil when the bundled models are missing; meetings then wait with speakers pending.
     private let diarizer: MeetingDiarizer?
@@ -44,7 +46,15 @@ final class MeetingLibrary {
     func launch(models: Models, settings: AppSettings) {
         self.models = models
         guard let store else { return }
-        let unfinished = (try? store.unfinished()) ?? []
+        var unfinished = (try? store.unfinished()) ?? []
+        if let crashed = UserDefaults.standard.string(forKey: Self.recoveringKey).flatMap(UUID.init(uuidString:)) {
+            UserDefaults.standard.removeObject(forKey: Self.recoveringKey)
+            if unfinished.contains(where: { $0.id == crashed }) {
+                log.error("Recovering meeting \(crashed, privacy: .public) stopped Bark; it is kept as interrupted")
+                interrupt(crashed)
+                unfinished.removeAll { $0.id == crashed }
+            }
+        }
         let log = log
         // The speaker pass reads archived audio, so leftovers are archived before it may start.
         Task {
@@ -109,8 +119,9 @@ final class MeetingLibrary {
         }
     }
 
-    /// A speaker pass cut short by quitting runs again at the next launch.
+    /// A speaker pass or a recovery cut short by quitting runs again at the next launch.
     func willTerminate() {
+        UserDefaults.standard.removeObject(forKey: Self.recoveringKey)
         guard let store, let id = diarizingMeeting else { return }
         try? store.setDiarization(id, .pending)
     }
@@ -139,19 +150,31 @@ final class MeetingLibrary {
         }
         var recovered = 0
         for meeting in meetings {
+            UserDefaults.standard.set(meeting.id.uuidString, forKey: Self.recoveringKey)
             do {
                 let result = try await MeetingSession.recover(meeting.id, store: store, transcriber: transcriber)
                 log.info("Recovered meeting \(meeting.id, privacy: .public): \(result.segments, privacy: .public) segments")
                 recovered += 1
             } catch {
                 log.error("Recovering meeting \(meeting.id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                interrupt(meeting.id)
             }
+            UserDefaults.standard.removeObject(forKey: Self.recoveringKey)
         }
-        guard recovered > 0 else { return }
         notifyChanged()
         hq.sync()
+        guard recovered > 0 else { return }
         diarize()
         await notifyRecovered(recovered)
+    }
+
+    /// Kept with what was transcribed and sent to hq; never recovered again.
+    private func interrupt(_ id: UUID) {
+        do {
+            try store?.interrupt(id)
+        } catch {
+            log.error("Marking meeting \(id, privacy: .public) interrupted failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     /// Provisional authorization: delivered quietly to Notification Center, never a prompt.

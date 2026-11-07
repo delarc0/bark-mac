@@ -366,6 +366,17 @@ struct MeetingStoreTests {
         #expect(try store.deleteExpiredAudio(now: now) == [waiting])
     }
 
+    @Test func aFailedRecoveryIsInterruptedAndQueued() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "sv", mode: .call).id
+        try store.setStatus(id, .transcribing)
+        try store.interrupt(id)
+        #expect(try store.meeting(id)?.status == .interrupted)
+        #expect(try store.unfinished().isEmpty)
+        #expect(try store.pendingOutbox().map(\.meetingID) == [id])
+    }
+
     @Test func audioIsReadFromThePCMWhileAnArchiveBesideItMayBeCutShort() throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try MeetingStore(root: root)
