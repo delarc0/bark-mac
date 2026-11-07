@@ -43,13 +43,19 @@ final class MLXWorker: Sendable {
                           _ work: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             let once = Once(continuation)
-            let job: @Sendable () -> Void = { once.resume(Result { try work() }) }
+            let timeOut: @Sendable (TimeInterval) -> Void = { after in
+                DispatchQueue.global().asyncAfter(deadline: .now() + after) { once.resume(.failure(TranscriberError.timedOut)) }
+            }
+            // The clock starts when the job runs: waiting behind a warm-up is not a hung decode.
+            let job: @Sendable () -> Void = {
+                if let seconds { timeOut(seconds) }
+                once.resume(Result { try work() })
+            }
             jobs.withLock { priority == .foreground ? $0.foreground.append(job) : $0.background.append(job) }
             // One dispatch per job, each taking whichever job comes first when it gets the queue.
             queue.async { self.next() }
-            if let seconds {
-                DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { once.resume(.failure(TranscriberError.timedOut)) }
-            }
+            // A job stuck behind a hung one still fails, once it has waited longer than any job may run.
+            if let seconds { timeOut(seconds + Transcriber.warmUpTimeout) }
         }
     }
 }
@@ -162,7 +168,7 @@ public actor Transcriber {
     private func loadSwedish(_ folder: URL) async {
         do {
             let engine = try await worker.run(.background) { try Engine(folder: folder) }
-            try await warmUp(engine, language: "sv")
+            try await warmUp(engine, language: "sv", .background)
             engines[.swedish] = engine
         } catch {
             log.error("Swedish model failed to load, Swedish runs on the general model: \(String(describing: error), privacy: .public)")
@@ -177,8 +183,8 @@ public actor Transcriber {
 
     /// Decodes 1 s of real silence straight on the engine (a session's speech gate would skip it),
     /// which compiles the Metal kernels and pages in the weights before the first dictation.
-    private func warmUp(_ engine: Engine, language: String) async throws {
-        _ = try await worker.run(timeout: Self.warmUpTimeout) {
+    private func warmUp(_ engine: Engine, language: String, _ priority: MLXWorker.Priority = .foreground) async throws {
+        _ = try await worker.run(priority, timeout: Self.warmUpTimeout) {
             try engine.transcribe([Float](repeating: 0, count: Self.sampleRate), language: language)
         }
     }

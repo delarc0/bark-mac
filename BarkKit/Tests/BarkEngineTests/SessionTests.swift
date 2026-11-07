@@ -1,6 +1,7 @@
 import BarkCore
 @testable import BarkEngine
 import Foundation
+import Synchronization
 import Testing
 
 struct WorkerTests {
@@ -13,6 +14,15 @@ struct WorkerTests {
         }
         #expect(clock.now - start < .milliseconds(900))
         #expect(try await worker.run(timeout: 5) { 2 } == 2) // queued behind the abandoned job, then runs
+    }
+
+    @Test func timeoutStartsWhenTheJobRuns() async throws {
+        let worker = MLXWorker()
+        let running = Mutex(false)
+        let busy = Task { try await worker.run { running.withLock { $0 = true }; Thread.sleep(forTimeInterval: 0.4) } }
+        while !running.withLock({ $0 }) { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(try await worker.run(timeout: 0.2) { 2 } == 2) // waited 0.4 s, ran well inside 0.2 s
+        try await busy.value
     }
 
     @Test func everyTranscriberSharesOneQueueAndGate() async {
