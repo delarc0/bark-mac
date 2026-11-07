@@ -205,6 +205,7 @@ private struct ModelTab: View {
             Divider()
             Row(label: "Swedish model") {
                 Toggle("Use kb-whisper-large for Swedish (~\(Models.size(of: Models.swedish)))", isOn: $settings.swedishModelEnabled).toggleStyle(.switch)
+                    .onChange(of: settings.swedishModelEnabled) { Models.shared.load() }
             }
             Note(text: "KB-Whisper makes about a third fewer errors on Swedish (5.8% vs 9.4% measured on FLEURS). It loads in the background after launch; until it is ready, Swedish runs on whisper-large-v3. Takes effect on next launch.")
             LegacyModelsRow()
