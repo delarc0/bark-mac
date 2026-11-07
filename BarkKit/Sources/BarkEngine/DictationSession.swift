@@ -100,8 +100,8 @@ public actor DictationSession {
         wakeUp.yield()
         await pump?.value
         gate.close(id)
-        let text = TextCleanup.process(segments.map(\.text), cleanup: cleanup, vocabulary: vocabulary)
         let decoded = segments.isEmpty ? nil : route
+        let text = TextCleanup.process(segments.map(\.text), cleanup: cleanup, language: decoded?.language, vocabulary: vocabulary)
         return DictationResult(text: text, releaseToFinal: (clock.now - release).seconds, segments: segments,
                                model: decoded?.model, language: decoded?.language, detection: detection)
     }

@@ -3,7 +3,13 @@ import Testing
 
 struct TextCleanupTests {
     @Test func stripsFillersAndCapitalisesTheNewFirstWord() {
-        #expect(TextCleanup.process(["um, testing this. uh it works"]) == "Testing this. It works")
+        #expect(TextCleanup.process(["um, testing this. uh it works"], language: "en") == "Testing this. It works")
+    }
+
+    @Test func fillersStayOutsideEnglish() {
+        #expect(TextCleanup.process(["wir treffen uns um 10 Uhr"], language: "de") == "Wir treffen uns um 10 Uhr")
+        #expect(TextCleanup.process(["um carro"], language: "pt") == "Um carro")
+        #expect(TextCleanup.process(["um carro"]) == "Um carro")
     }
 
     @Test func collapsesWhitespaceAndSpaceBeforePunctuation() {

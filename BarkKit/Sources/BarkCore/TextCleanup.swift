@@ -17,14 +17,16 @@ public enum TextCleanup {
         "bl.a.", "t.ex.", "m.m.", "o.s.v.", "d.v.s.", "e.g.", "i.e.", "etc.", "vs.", "ca.",
     ]
 
-    /// Joins segment texts with single spaces and cleans the result.
-    public static func process(_ segments: [String], cleanup: Bool = true, vocabulary: [String: String] = [:]) -> String {
+    /// Joins segment texts with single spaces and cleans the result. Fillers are English only:
+    /// "um" is a word in German and Portuguese.
+    public static func process(_ segments: [String], cleanup: Bool = true, language: String? = nil,
+                               vocabulary: [String: String] = [:]) -> String {
         var text = segments.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
         text = replace(specialTokenRegex, in: text, with: "")
         if cleanup {
-            text = replace(fillerRegex, in: text, with: "")
+            if language == "en" { text = replace(fillerRegex, in: text, with: "") }
             // Trim before capitalising: a stripped sentence-initial filler ("Um, testing") leaves a
             // leading space that would keep the ^ anchor from seeing the new first word.
             text = collapseWhitespace(text).trimmingCharacters(in: .whitespacesAndNewlines)
