@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import BarkCapture
 import BarkCore
@@ -27,6 +28,8 @@ final class Dictation {
     var onStateChange: ((State) -> Void)?
     var onDeadInput: ((String) -> Void)?
     var onNothingHeard: (() -> Void)?
+    /// The text went to the clipboard: the app the dictation started in is no longer in front.
+    var onCopiedInstead: (() -> Void)?
     var onSuccess: (() -> Void)?
     /// The overlay while waiting on the model: spinner, or spinner and percentage on a download.
     var onWaiting: ((Double?) -> Void)?
@@ -38,6 +41,8 @@ final class Dictation {
     private var feeder: Task<Pending, Never>?
     private var hardStop: Task<Void, Never>?
     private var awaitingMicGrant = false
+    /// The app in front at the press: the text pastes only into it.
+    private var target: pid_t?
 
     /// What the capture produced: the session if it already started, plus audio it has not seen.
     private struct Pending {
@@ -88,6 +93,7 @@ final class Dictation {
         }
         let start = ContinuousClock.now
         pressedAt = start
+        target = NSWorkspace.shared.frontmostApplication?.processIdentifier
         state = .recording
         Sounds.shared.playStart()
         feeder = Task { [models, settings] in
@@ -183,7 +189,12 @@ final class Dictation {
             if !lossy { onNothingHeard?() }
         } else {
             History.shared.add(result.text)
-            Paste.paste(result.text)
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == target {
+                Paste.paste(result.text)
+            } else {
+                Paste.copy(result.text)
+                onCopiedInstead?()
+            }
             // A dictation with a lost segment still pastes what it has, without the done chime.
             if lossy {
                 Sounds.shared.playError()

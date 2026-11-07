@@ -46,6 +46,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         dictation.onDeadInput = { [weak self] name in self?.explainDeadInput(name) }
         dictation.onNothingHeard = { [weak self] in self?.explainNothingHeard() }
+        dictation.onCopiedInstead = { [weak self] in
+            self?.panel.show(PanelMessage(title: "The text is on the clipboard",
+                                          detail: "You switched apps before it was ready, so Bark did not paste it."))
+        }
         // A dictation that worked proves the input; a later failure deserves its explanation again.
         dictation.onSuccess = { [weak self] in
             self?.warnedDeadInput = false
@@ -519,9 +523,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func copyEntry(_ sender: NSMenuItem) {
         guard let text = sender.representedObject as? String else { return }
-        // Never restored, so the concealed marker is all that keeps it out of clipboard histories.
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([Paste.concealedItem(text)])
+        Paste.copy(text)
     }
 
     @objc private func pickDevice(_ sender: NSMenuItem) {

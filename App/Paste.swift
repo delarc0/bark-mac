@@ -44,6 +44,13 @@ enum Paste {
         }
     }
 
+    /// On the clipboard to stay: never restored, so the concealed marker is all that keeps it out of
+    /// clipboard histories.
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([concealedItem(text)])
+    }
+
     /// Clipboard managers poll well inside the restore window and would archive every dictation
     /// to their own history on disk; the nspasteboard.org marker opts out.
     static func concealedItem(_ text: String) -> NSPasteboardItem {
