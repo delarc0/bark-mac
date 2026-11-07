@@ -2,9 +2,8 @@ import AVFoundation
 import FluidAudio
 import Foundation
 
-// Eval-only comparisons that need FluidAudio, kept out of bark-eval so the
-// shipping engine's binary never links it.
-//   parakeet: Parakeet TDT 0.6B v3 over a clip dir, same JSONL as bark-eval.
+// Eval-only comparisons that need FluidAudio.
+//   parakeet: Parakeet TDT 0.6B v3 over a clip dir, same JSONL as mlx-eval.
 //   gate:     speech gate over a clip dir; writes the trimmed audio of every
 //             clip it lets through, plus gate.jsonl with each decision.
 

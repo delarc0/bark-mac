@@ -13,8 +13,6 @@ let package = Package(
         .library(name: "BarkCalendar", targets: ["BarkCalendar"]),
     ],
     dependencies: [
-        // Spike tools only (bark-eval, stream-eval): the WhisperKit/CoreML engine Bark2 replaces.
-        .package(url: "https://github.com/argmaxinc/argmax-oss-swift", exact: "1.1.0"),
         // Silero v6 VAD for BarkEngine's segmenter; Parakeet in fluid-eval.
         .package(url: "https://github.com/FluidInference/FluidAudio", exact: "0.17.7"),
         .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.32.3"),
@@ -47,17 +45,6 @@ let package = Package(
         .executableTarget(
             name: "mlx-eval",
             dependencies: ["BarkEngine", "BarkStore", .product(name: "MLX", package: "mlx-swift")]
-        ),
-        .executableTarget(
-            name: "bark-eval",
-            dependencies: [.product(name: "WhisperKit", package: "argmax-oss-swift")]
-        ),
-        .executableTarget(
-            name: "stream-eval",
-            dependencies: [
-                .product(name: "WhisperKit", package: "argmax-oss-swift"),
-                .product(name: "FluidAudio", package: "FluidAudio"),
-            ]
         ),
         .executableTarget(
             name: "fluid-eval",

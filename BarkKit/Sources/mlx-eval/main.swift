@@ -5,7 +5,7 @@ import BarkStore
 import Foundation
 import MLX
 
-// bark-eval's contract on BarkEngine: transcribes every .wav in a directory and writes one JSON
+// The eval CLI on BarkEngine: transcribes every .wav in a directory and writes one JSON
 // line per clip. Engine-only by default (the S8 mode: one decode per clip, no gate, no clean-up).
 // --pipeline feeds each clip through a DictationSession exactly as the app will (Silero segments,
 // 28 s cut, routing, clean-up): as fast as possible, or with --realtime 1 in 100 ms blocks at
