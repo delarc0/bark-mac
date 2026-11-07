@@ -104,8 +104,12 @@ public actor Transcriber {
     public static let mlxCacheLimit = 256 * 1024 * 1024
     static let sampleRate = 16_000
 
-    let worker = MLXWorker()
-    let gate = ForegroundGate()
+    /// One per process: a reload makes a new Transcriber while a meeting still decodes on the old one,
+    /// and both must share the one MLX queue and the dictation-first gate.
+    static let sharedWorker = MLXWorker()
+    static let sharedGate = ForegroundGate()
+    let worker = Transcriber.sharedWorker
+    let gate = Transcriber.sharedGate
     private let generalFolder: URL
     private let swedishFolder: URL?
     private let vadFolder: URL

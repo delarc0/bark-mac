@@ -14,6 +14,13 @@ struct WorkerTests {
         #expect(clock.now - start < .milliseconds(900))
         #expect(try await worker.run(timeout: 5) { 2 } == 2) // queued behind the abandoned job, then runs
     }
+
+    @Test func everyTranscriberSharesOneQueueAndGate() async {
+        let a = Transcriber(general: URL(filePath: "/a"), swedish: nil, vad: URL(filePath: "/a"))
+        let b = Transcriber(general: URL(filePath: "/b"), swedish: nil, vad: URL(filePath: "/b"))
+        #expect(await a.worker === b.worker)
+        #expect(await a.gate === b.gate)
+    }
 }
 
 struct SessionTests {
