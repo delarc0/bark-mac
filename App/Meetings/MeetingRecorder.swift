@@ -183,6 +183,11 @@ final class MeetingRecorder {
                     if let title = event.title, !title.isEmpty, try store.meeting(id)?.title == nil {
                         try store.setTitle(id, title)
                     }
+                    // Stop pressed while the calendar answered: the meeting already went to hq without it.
+                    if try store.meeting(id)?.status.isFinished == true {
+                        try store.enqueue(id)
+                        library.hq.sync()
+                    }
                 } catch {
                     log.error("Keeping the calendar event failed: \(String(describing: error), privacy: .public)")
                 }
