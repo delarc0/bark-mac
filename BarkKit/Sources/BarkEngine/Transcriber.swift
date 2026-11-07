@@ -130,10 +130,10 @@ public actor Transcriber {
     /// Loads and warms the general model and Silero, then starts loading the Swedish model in the
     /// background. Returns once dictation can run.
     public func start() async throws {
-        Memory.cacheLimit = Self.mlxCacheLimit
         if vad == nil {
             vad = try Self.loadVAD(vadFolder)
         }
+        Memory.cacheLimit = Self.mlxCacheLimit
         if engines[.general] == nil {
             let folder = generalFolder
             let engine = try await worker.run { try Engine(folder: folder) }
