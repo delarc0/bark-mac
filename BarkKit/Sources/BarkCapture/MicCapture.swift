@@ -31,6 +31,8 @@ public final class MicCapture {
     private var deviceID: AudioDeviceID?
     private var running = false
     private var rebuildAttempts = 0
+    /// The rebuild gave up: nothing has been captured since, whatever came before.
+    private var lost = false
     private var observer: NSObjectProtocol?
 
     public init() {
@@ -70,17 +72,19 @@ public final class MicCapture {
         }
         running = true
         rebuildAttempts = 0
+        lost = false
         return stream
     }
 
-    /// Stops capturing, ends the stream and says what the input delivered.
+    /// Stops capturing, ends the stream and says what the input delivered. A capture whose device
+    /// could not be rebuilt reports no callbacks, even if audio came before it went.
     @discardableResult
     public func stop() -> InputHealth {
         running = false
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         let (frames, peak) = meter.end()
-        return InputHealth.classify(frames: frames, peak: peak)
+        return lost ? .noCallbacks : InputHealth.classify(frames: frames, peak: peak)
     }
 
     private func setVoiceProcessing(_ enabled: Bool) throws {
@@ -143,16 +147,19 @@ public final class MicCapture {
         do {
             try install()
             rebuildAttempts = 0
+            lost = false
         } catch {
             if let fallback = AudioInputs.defaultID(), fallback != deviceID, (try? bind(fallback)) != nil,
                (try? install()) != nil {
                 rebuildAttempts = 0
+                lost = false
                 return
             }
             // A device still settling refuses the bind for a moment; without a retry the rest of
             // the dictation is silently lost.
             guard rebuildAttempts < Self.maxRebuildAttempts else {
                 log.error("Capture rebuild failed, giving up: \(error.localizedDescription, privacy: .public)")
+                lost = true
                 return
             }
             rebuildAttempts += 1
