@@ -172,16 +172,17 @@ public final class MeetingDiarizer: Sendable {
         return SegmentSplit.keepsText(whole: segment.text, pieces: pieces.map(\.text), rule: rule) ? pieces : nil
     }
 
-    /// One stream's speaker turns, from its archived audio or, when archiving failed, its PCM.
+    /// One stream's speaker turns, from its PCM while archiving has not finished (a CAF beside it
+    /// may be cut short), else its archived audio.
     private func diarize(_ stream: MeetingStream, of id: UUID, store: MeetingStore,
                          manager: OfflineDiarizerManager) async throws -> ([SpeakerAttribution.Turn], Double) {
         let archived = store.archivedAudio(id, stream), raw = store.rawAudio(id, stream)
-        if FileManager.default.fileExists(atPath: archived.path) {
-            return try await Self.turns(file: archived, manager: manager)
-        } else if FileManager.default.fileExists(atPath: raw.path) {
+        if FileManager.default.fileExists(atPath: raw.path) {
             let source = try PCMSource(url: raw)
             let result = try await manager.process(audioSource: source, audioLoadingSeconds: 0)
             return (Self.turns(result.segments), Double(source.sampleCount) / Double(PCM.sampleRate))
+        } else if FileManager.default.fileExists(atPath: archived.path) {
+            return try await Self.turns(file: archived, manager: manager)
         } else {
             throw StoreError("no audio for \(stream.rawValue) in meeting \(id)")
         }

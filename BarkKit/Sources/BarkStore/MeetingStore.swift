@@ -466,12 +466,12 @@ public final class MeetingStore: Sendable {
 
     // MARK: Audio
 
-    /// Up to `count` samples of a stream from sample `start`, from its archive or, before that,
-    /// its PCM.
+    /// Up to `count` samples of a stream from sample `start`, from its PCM or, once archived, its
+    /// CAF. The PCM wins while it exists: a CAF beside it may be an archive cut short.
     public func readAudio(_ meeting: UUID, _ stream: MeetingStream, from start: Int, count: Int) throws -> [Float] {
-        let archived = archivedAudio(meeting, stream)
-        guard FileManager.default.fileExists(atPath: archived.path) else { return try PCM.read(rawAudio(meeting, stream), from: start, count: count) }
-        return try PCM.readArchive(archived, from: start, count: count)
+        let raw = rawAudio(meeting, stream)
+        guard FileManager.default.fileExists(atPath: raw.path) else { return try PCM.readArchive(archivedAudio(meeting, stream), from: start, count: count) }
+        return try PCM.read(raw, from: start, count: count)
     }
 
     /// Compresses every stream's PCM to Apple Lossless and deletes the PCM once the CAF checks out.
@@ -482,19 +482,28 @@ public final class MeetingStore: Sendable {
     }
 
     /// Archives finished meetings whose PCM is still there (an archive cut short by a quit or crash).
+    /// One meeting failing does not stop the rest; the failures are thrown together at the end.
     public func archiveLeftovers() throws {
+        var failures: [String] = []
         for meeting in try meetings() where meeting.status == .done || meeting.status == .interrupted {
-            try archiveAudio(meeting.id)
+            do {
+                try archiveAudio(meeting.id)
+            } catch {
+                failures.append("\(meeting.id): \(error)")
+            }
         }
+        guard failures.isEmpty else { throw StoreError(failures.joined(separator: "; ")) }
     }
 
     /// Deletes the audio of finished meetings that ended (or, without an end, started) more than
-    /// `retention` ago and marks them; transcripts stay. Returns the meetings it deleted audio for.
+    /// `retention` ago and marks them; transcripts stay. A meeting whose speaker pass is pending or
+    /// running keeps its audio until the pass is over. Returns the meetings it deleted audio for.
     @discardableResult
     public func deleteExpiredAudio(retention: TimeInterval = MeetingStore.defaultRetention, now: Date = .now) throws -> [UUID] {
         let expired = try db.query("""
             SELECT id FROM meetings
-            WHERE status IN ('done', 'interrupted') AND audio_deleted_at IS NULL AND COALESCE(ended_at, started_at) < ?
+            WHERE status IN ('done', 'interrupted') AND COALESCE(diarization, '') NOT IN ('pending', 'running')
+                AND audio_deleted_at IS NULL AND COALESCE(ended_at, started_at) < ?
             """, [now.addingTimeInterval(-retention).timeIntervalSince1970]) { UUID(uuidString: $0.text(0)) }.compactMap { $0 }
         for id in expired {
             for stream in MeetingStream.allCases {
