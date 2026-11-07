@@ -45,6 +45,21 @@ struct HQUploaderTests {
         #expect(String(decoding: body, as: UTF8.self).contains("\"calendar_event\":null"))
     }
 
+    @Test func aCalendarEventThatNoLongerDecodesSendsNull() async throws {
+        let test = TestSettings(), server = StubServer()
+        defer { test.cleanUp(); try? FileManager.default.removeItem(at: root) }
+        try connected(server, test)
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "en", mode: .inPerson).id
+        try store.setCalendarEvent(id, Data(#"{"id": 7}"#.utf8))
+        try store.finish(id, endedAt: .now)
+        server.respond(status: 201)
+        _ = await HQUploader(store: store, settings: test.settings, appVersion: "1.0.0 (42)", session: server.session).drain()
+        let body = try #require(server.requests.first?.body)
+        #expect(String(decoding: body, as: UTF8.self).contains("\"calendar_event\":null"))
+        #expect(try store.pendingOutbox().isEmpty)
+    }
+
     func connected(_ server: StubServer, _ test: TestSettings) throws {
         try test.settings.setBaseURL(server.base.absoluteString)
         try test.settings.storeToken("tok_device_1", for: server.base)

@@ -142,7 +142,8 @@ struct MeetingPayload: Encodable {
         self.speakers = speakers.map { SpeakerItem(label: $0.label, name: $0.name) }
         notes = try store.notes(id)?.body
         gaps = try store.gaps(id).map { GapItem(at: $0.at, reason: $0.reason) }
-        calendarEvent = try store.calendarEvent(id).map { CalendarItem(event: try CalendarEvent.decode($0)) }
+        // An event that no longer decodes goes as null; throwing would retry the meeting forever.
+        calendarEvent = try store.calendarEvent(id).flatMap { try? CalendarEvent.decode($0) }.map(CalendarItem.init(event:))
         self.appVersion = appVersion
     }
 
