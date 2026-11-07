@@ -66,6 +66,7 @@ public actor DictationSession {
 
     deinit {
         gate.close(id)
+        wakeUp.finish()
     }
 
     public func feed(_ chunk: [Float]) {
@@ -107,14 +108,27 @@ public actor DictationSession {
     }
 
     private func startPump() {
-        if pump == nil { pump = Task { await run() } }
+        guard pump == nil else { return }
+        let wake = wake
+        // Waits for wake outside the actor and holds self only while working, so a session dropped
+        // without finish() or cancel() still deinits and closes the gate.
+        pump = Task { [weak self] in
+            for await _ in wake {
+                guard let self else { return }
+                if await self.drainUntilReleased() { break }
+            }
+            await self?.run()
+        }
     }
 
+    /// True once released.
+    private func drainUntilReleased() async -> Bool {
+        await drain()
+        return released
+    }
+
+    /// The tail after release: the open remainder, the language decision if still due, every pending decode.
     private func run() async {
-        for await _ in wake {
-            await drain()
-            if released { break }
-        }
         guard !cancelled else { return }
         if let remainder = segmenter.remainder {
             await step(remainder)

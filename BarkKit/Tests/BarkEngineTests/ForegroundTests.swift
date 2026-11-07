@@ -57,6 +57,19 @@ struct ForegroundTests {
         #expect(passed.withLock { $0 } && gate.isClear)
     }
 
+    /// No models needed: the session takes the Silero model the app bundles and never decodes silence.
+    @Test func aFedDictationDroppedWithoutFinishClosesTheGate() async throws {
+        let silero = URL(filePath: #filePath).appending(path: "../../../../App/Resources/silero-vad").standardized
+        let transcriber = Transcriber(general: URL(filePath: "/nonexistent"), swedish: nil, vad: silero)
+        let gate = ForegroundGate()
+        do {
+            let session = DictationSession(transcriber: transcriber, gate: gate, vad: try Transcriber.loadVAD(silero),
+                                           choice: .explicit("en"), cleanup: true, vocabulary: [:])
+            await session.feed([Float](repeating: 0, count: 8_000))
+        }
+        try await eventually { gate.isClear }
+    }
+
     /// Its own gate: other tests' dictations share the fixture transcriber and run in parallel.
     @Test(.enabled(if: Fixtures.modelsInstalled)) func aDictationHoldsTheGateUntilItEnds() async throws {
         let transcriber = try await Fixtures.transcriber.value
