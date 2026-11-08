@@ -106,6 +106,9 @@ targets:
           PRODUCT_NAME: Bark Dev
           PRODUCT_BUNDLE_IDENTIFIER: se.lab37.bark.mac.dev
           BARK_FEED_URL: ""
+          CODE_SIGN_ENTITLEMENTS: App/BarkDev.entitlements
+          # Xcode's ad-hoc signature leaves the hardened runtime out unless asked.
+          OTHER_CODE_SIGN_FLAGS: --options=runtime
         Release:
           PRODUCT_NAME: Bark
           PRODUCT_BUNDLE_IDENTIFIER: se.lab37.bark.mac

@@ -94,7 +94,9 @@ pkill -f "Bark Dev.app/Contents/MacOS/Bark Dev" 2>/dev/null || true
 sleep 1
 rm -rf "$DEST"
 cp -R "$APP" "$DEST"
-codesign --force --deep --sign "$SIGN_ID" "$DEST" >/dev/null 2>&1 || true
+# The installed copy drops get-task-allow (no debugger can attach) and keeps the hardened runtime.
+codesign --force --deep --options runtime --entitlements App/BarkDev.entitlements --sign "$SIGN_ID" "$DEST" >/dev/null 2>&1 \
+  || die "Re-signing $DEST failed."
 
 cat <<MSG
 
