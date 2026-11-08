@@ -53,7 +53,7 @@ openssl pkcs12 -export $LEGACY_FLAG -out "$TMP/bark.p12" \
   -inkey "$TMP/bark.key" -in "$TMP/bark.crt" -passout pass: >/dev/null 2>&1
 
 echo "==> Importing into your login keychain"
-security import "$TMP/bark.p12" -k "$KEYCHAIN" -P "" -A >/dev/null
+security import "$TMP/bark.p12" -k "$KEYCHAIN" -P "" -T /usr/bin/codesign >/dev/null
 
 echo "==> Trusting it for code signing (this is the login-password prompt)"
 security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$TMP/bark.crt"
