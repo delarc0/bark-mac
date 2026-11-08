@@ -46,7 +46,14 @@ public actor GoogleCalendar {
         let from = moment.addingTimeInterval(-Self.lookBehind), to = moment.addingTimeInterval(Self.lookAhead)
         return try await withThrowingTaskGroup(of: [CalendarCandidate].self) { group in
             for calendar in list {
-                group.addTask { try await self.events(of: calendar.id, from: from, to: to) }
+                group.addTask {
+                    // One calendar Google refuses (403, 404) must not hide the others; a dead token still fails the lookup.
+                    do {
+                        return try await self.events(of: calendar.id, from: from, to: to)
+                    } catch CalendarError.server(let status) where status != 401 {
+                        return []
+                    }
+                }
             }
             var all: [CalendarCandidate] = []
             for try await events in group { all += events }

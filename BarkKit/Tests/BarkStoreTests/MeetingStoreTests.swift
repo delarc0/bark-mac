@@ -336,6 +336,7 @@ struct MeetingStoreTests {
             try writer.close()
             if status == .done {
                 try store.finish(id, endedAt: now.addingTimeInterval(-days * 86_400))
+                try store.setDiarization(id, .done)
                 try store.archiveAudio(id)
             } else {
                 try store.setStatus(id, status)
@@ -346,7 +347,14 @@ struct MeetingStoreTests {
         let old = try meeting(endedDaysAgo: 31, status: .done)
         let recent = try meeting(endedDaysAgo: 29, status: .done)
         let unfinished = try meeting(endedDaysAgo: 40, status: .recording)
+        // The speaker pass reads the audio: pending or running keeps it, failed lets it go.
+        let waiting = try meeting(endedDaysAgo: 31, status: .done)
+        try store.setDiarization(waiting, .pending)
+        let diarizing = try meeting(endedDaysAgo: 31, status: .done)
+        try store.setDiarization(diarizing, .running)
         #expect(try store.deleteExpiredAudio(now: now) == [old])
+        #expect(FileManager.default.fileExists(atPath: store.archivedAudio(waiting, .them).path))
+        #expect(FileManager.default.fileExists(atPath: store.archivedAudio(diarizing, .them).path))
         #expect(!FileManager.default.fileExists(atPath: store.archivedAudio(old, .them).path))
         #expect(try store.meeting(old)?.audioDeletedAt == now)
         #expect(try store.segments(old).map(\.text) == ["Hej"])
@@ -354,6 +362,35 @@ struct MeetingStoreTests {
         // An unfinished meeting's audio is what recovery needs: never expired.
         #expect(FileManager.default.fileExists(atPath: store.rawAudio(unfinished, .them).path))
         #expect(try store.deleteExpiredAudio(now: now).isEmpty)
+        try store.setDiarization(waiting, .failed)
+        #expect(try store.deleteExpiredAudio(now: now) == [waiting])
+    }
+
+    @Test func aFailedRecoveryIsInterruptedAndQueued() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "sv", mode: .call).id
+        try store.setStatus(id, .transcribing)
+        try store.interrupt(id)
+        #expect(try store.meeting(id)?.status == .interrupted)
+        #expect(try store.unfinished().isEmpty)
+        #expect(try store.pendingOutbox().map(\.meetingID) == [id])
+    }
+
+    @Test func audioIsReadFromThePCMWhileAnArchiveBesideItMayBeCutShort() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MeetingStore(root: root)
+        let id = try store.createMeeting(language: "sv", mode: .call).id
+        let half = root.appending(path: "half.pcm")
+        for (url, count) in [(half, 4_000), (store.rawAudio(id, .me), 8_000)] {
+            let writer = try PCMWriter(url: url)
+            try writer.append([Float](repeating: 0.25, count: count))
+            try writer.close()
+        }
+        try PCM.archive(half, to: store.archivedAudio(id, .me))
+        #expect(try store.readAudio(id, .me, from: 0, count: 10_000).count == 8_000)
+        try store.archiveAudio(id)
+        #expect(try store.readAudio(id, .me, from: 0, count: 10_000).count == 8_000)
     }
 
     @Test func leftoverPCMOfAFinishedMeetingIsArchived() throws {
@@ -371,5 +408,25 @@ struct MeetingStoreTests {
         #expect(FileManager.default.fileExists(atPath: store.archivedAudio(done, .me).path))
         #expect(!FileManager.default.fileExists(atPath: store.rawAudio(done, .me).path))
         #expect(FileManager.default.fileExists(atPath: store.rawAudio(recording, .me).path))
+    }
+
+    @Test func oneLeftoverFailingDoesNotStopTheRest() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MeetingStore(root: root)
+        let now = Date.now
+        let fine = try store.createMeeting(language: "sv", mode: .call, startedAt: now.addingTimeInterval(-60)).id
+        let broken = try store.createMeeting(language: "sv", mode: .call, startedAt: now).id
+        for id in [fine, broken] {
+            let writer = try PCMWriter(url: store.rawAudio(id, .me))
+            try writer.append([Float](repeating: 0.2, count: 8_000))
+            try writer.close()
+            try store.finish(id, endedAt: now)
+        }
+        // The newest meeting, archived first, has a PCM that cannot be read.
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: store.rawAudio(broken, .me).path)
+        #expect(throws: StoreError.self) { try store.archiveLeftovers() }
+        #expect(FileManager.default.fileExists(atPath: store.archivedAudio(fine, .me).path))
+        #expect(!FileManager.default.fileExists(atPath: store.rawAudio(fine, .me).path))
+        #expect(FileManager.default.fileExists(atPath: store.rawAudio(broken, .me).path))
     }
 }

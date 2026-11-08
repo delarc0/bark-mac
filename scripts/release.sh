@@ -58,6 +58,22 @@ preflight() {
     echo "  gh: NOT authenticated (gh auth login)"
     PREFLIGHT_OK=0
   fi
+  # A release on the placeholder model URLs would update every user into an app that cannot fetch a model.
+  local model_ids model_code id
+  model_ids=$(sed -nE 's/^ *static let (general|swedish) = ModelID\.([A-Za-z0-9]+)$/\2/p' App/Models.swift)
+  model_code=$(grep -v '^[[:space:]]*//' BarkKit/Sources/BarkEngine/ModelStore.swift)
+  if [ "$(echo "$model_ids" | grep -c .)" != 2 ]; then
+    echo "  models: could not read the app's model ids from App/Models.swift"
+    PREFLIGHT_OK=0
+  fi
+  for id in $model_ids; do
+    if grep -qE "manifest\(ModelID\.${id}, repo: \"[^\"]+\"" <<<"$model_code"; then
+      bold "models: ${id} downloads from its published repo"
+    else
+      echo "  models: ${id} still on the placeholder URL - BarkKit/scripts/publish-models.sh, then --apply-urls"
+      PREFLIGHT_OK=0
+    fi
+  done
   if [ -n "$(git status --porcelain)" ]; then
     echo "  git: working tree DIRTY - commit or stash first, releases must be reproducible"
     PREFLIGHT_OK=0

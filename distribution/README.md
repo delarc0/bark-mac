@@ -38,7 +38,9 @@ Verify readiness any time:
 ./scripts/release.sh 1.0.0 --publish
 ```
 
-That does, in order: preflight → bump `MARKETING_VERSION` +
+That does, in order: preflight (which also refuses while the app's default
+models still point at the placeholder URL: run
+`BarkKit/scripts/publish-models.sh` and `--apply-urls` first) → bump `MARKETING_VERSION` +
 `CURRENT_PROJECT_VERSION` in `project.yml` → archive Release → export with
 Developer ID (`ExportOptions.plist`) → notarize (`AC_NOTARY`, waits) → staple →
 verify (codesign strict, hardened-runtime flag, **audio-input entitlement**,
