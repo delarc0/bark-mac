@@ -10,7 +10,7 @@
 #   ./scripts/release.sh 1.0.0 --publish --notes "Fixed X"
 #
 # One-time machine setup (both interactive, Apple ID required):
-#   1. Xcode > Settings > Accounts > Manage Certificates > + > Developer ID Application
+#   1. Xcode > Settings > Accounts: sign in to the LAB37 team (the export uses Xcode cloud signing)
 #   2. xcrun notarytool store-credentials AC_NOTARY --key AuthKey_XXX.p8 --key-id XXX --issuer <uuid>
 set -euo pipefail
 
@@ -35,10 +35,9 @@ preflight() {
   [ -f project.yml ] || fail "project.yml not found (script must live in scripts/ under the repo root)"
   command -v xcodegen >/dev/null || { echo "  xcodegen: MISSING (brew install xcodegen)"; PREFLIGHT_OK=0; }
   if security find-identity -v -p codesigning | grep -q "Developer ID Application: .*(${TEAM_ID})"; then
-    bold "cert: Developer ID Application (${TEAM_ID}) present"
+    bold "cert: Developer ID Application (${TEAM_ID}) in the keychain"
   else
-    echo "  cert: MISSING - Xcode > Settings > Accounts > Manage Certificates > + > Developer ID Application"
-    PREFLIGHT_OK=0
+    echo "  cert: none local; the export signs through Xcode cloud signing (needs the LAB37 team in Xcode > Accounts) and the DMG ships unsigned, notarized"
   fi
   if xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
     bold "notary: keychain profile ${PROFILE} works"
@@ -141,7 +140,7 @@ bold "archived"
 
 step "Export with Developer ID"
 xcodebuild -exportArchive -archivePath build/Bark.xcarchive \
-  -exportPath build/export -exportOptionsPlist distribution/ExportOptions.plist \
+  -exportPath build/export -exportOptionsPlist distribution/ExportOptions.plist -allowProvisioningUpdates \
   >>"$LOG" 2>&1 || { tail -40 "$LOG"; fail "export failed (full log: $LOG)"; }
 APP="build/export/Bark.app"
 [ -d "$APP" ] || fail "export produced no app"
@@ -196,9 +195,9 @@ hdiutil create -volname "Bark" -srcfolder "$DMG_ROOT" -ov -format UDZO -quiet "$
 rm -rf "$DMG_ROOT"
 # Sign by certificate hash: the bare name goes ambiguous the day a renewal
 # cert coexists with the old one in the keychain.
-CERT_HASH=$(security find-identity -v -p codesigning | grep "Developer ID Application: .*(${TEAM_ID})" | head -1 | awk '{print $2}')
-[ -n "$CERT_HASH" ] || fail "could not resolve Developer ID cert hash"
-codesign --force --sign "$CERT_HASH" --timestamp "$DMG"
+CERT_HASH=$(security find-identity -v -p codesigning | grep "Developer ID Application: .*(${TEAM_ID})" | head -1 | awk '{print $2}' || true)
+# Cloud signing cannot sign a DMG; without a local cert it ships unsigned, notarized and stapled.
+[ -n "$CERT_HASH" ] && codesign --force --sign "$CERT_HASH" --timestamp "$DMG"
 notarize "$DMG"
 xcrun stapler staple "$DMG" >/dev/null
 xcrun stapler validate "$DMG" >/dev/null || fail "DMG staple didn't validate"

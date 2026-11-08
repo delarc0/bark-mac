@@ -17,8 +17,10 @@ Release pipeline for signed, notarized builds with Sparkle auto-update.
 
 Both steps are interactive (Apple ID) and cannot be scripted:
 
-1. **Developer ID certificate** — Xcode → Settings → Accounts → sign in
-   `erik@lab37.io` → Manage Certificates → **+** → **Developer ID Application**.
+1. **Signing**: Xcode → Settings → Accounts → sign in `erik@lab37.io` (LAB37 team).
+   The export uses Xcode cloud signing (automatic, `-allowProvisioningUpdates`), so no
+   Developer ID certificate needs to be in the keychain. With one there, the DMG is signed
+   too; without, it ships unsigned but notarized and stapled.
 2. **Notary credentials** — create an App Store Connect API key (Users and
    Access → Integrations, role Developer), then:
    ```bash
@@ -71,7 +73,7 @@ Without `--publish` it stops after local verification and pushes nothing
   `App/Bark.entitlements`; the verify step fails the release if it's missing.
 - **Never pass `CODE_SIGN_IDENTITY` on the xcodebuild CLI** — it leaks into the
   SPM package targets, which then demand a development team. The archive stays
-  ad-hoc; `-exportArchive` re-signs everything with the Developer ID cert per
+  ad-hoc; `-exportArchive` re-signs everything with Developer ID (cloud signing) per
   `ExportOptions.plist`.
 - The Debug-only post-build deep re-sign in `project.yml` does not run for
   Release archives (guarded on `${CONFIGURATION}`), so it can't fight the
