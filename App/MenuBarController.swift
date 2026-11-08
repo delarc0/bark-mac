@@ -557,8 +557,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func grantAccessibility() {
-        SystemSettings.open(.accessibility)
-        HotkeyMonitor.promptForTrust()
+        HotkeyMonitor.requestTrust()
         armHotkey()
     }
 

@@ -115,11 +115,7 @@ struct OnboardingView: View {
             continueButton
         case .accessibility:
             if !model.axGranted {
-                Button("Open System Settings") {
-                    SystemSettings.open(.accessibility)
-                    HotkeyMonitor.promptForTrust()
-                }
-                .buttonStyle(.bordered)
+                Button("Open System Settings") { HotkeyMonitor.requestTrust() }.buttonStyle(.bordered)
             }
             continueButton
         case .hotkey:

@@ -17,8 +17,13 @@ final class HotkeyMonitor {
 
     static var isTrusted: Bool { AXIsProcessTrusted() }
 
-    /// Adds Bark to the Accessibility list so the user only has to flip the switch.
-    static func promptForTrust() {
+    private static var prompted = false
+
+    /// One thing opens per click. The first time, Apple's prompt: it adds Bark to the Accessibility
+    /// list and its own button opens the pane. It does not come back, so later clicks open the pane.
+    static func requestTrust() {
+        guard !prompted else { return SystemSettings.open(.accessibility) }
+        prompted = true
         // The value of kAXTrustedCheckOptionPrompt, which Swift 6 treats as shared mutable state.
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
