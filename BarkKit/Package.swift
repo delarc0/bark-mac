@@ -13,7 +13,7 @@ let package = Package(
         .library(name: "BarkCalendar", targets: ["BarkCalendar"]),
     ],
     dependencies: [
-        // Silero v6 VAD for BarkEngine's segmenter, the offline diarizer (only its Diarizer trait); Parakeet in fluid-eval.
+        // Silero v6 VAD for BarkEngine's segmenter, the offline diarizer (only its Diarizer trait).
         .package(url: "https://github.com/FluidInference/FluidAudio", exact: "0.18.2", traits: ["Diarizer"]),
         .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.33.0"),
     ],
@@ -45,10 +45,6 @@ let package = Package(
         .executableTarget(
             name: "mlx-eval",
             dependencies: ["BarkEngine", "BarkStore", .product(name: "MLX", package: "mlx-swift")]
-        ),
-        .executableTarget(
-            name: "fluid-eval",
-            dependencies: [.product(name: "FluidAudio", package: "FluidAudio")]
         ),
         .executableTarget(name: "capture-probe", dependencies: ["BarkCapture", "BarkCore"]),
     ]
