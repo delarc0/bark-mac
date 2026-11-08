@@ -107,7 +107,17 @@ public final class PCMWriter {
                 raw.storeBytes(of: value.littleEndian, toByteOffset: index * 2, as: Int16.self)
             }
         }
-        try handle.write(contentsOf: data)
+        do {
+            try handle.write(contentsOf: data)
+        } catch {
+            // Disk full: the file still takes the block as silence (a sparse extension needs no free
+            // space), so the timeline after it stays where the segmenter has it.
+            let end = UInt64((count + samples.count) * 2)
+            if (try? handle.truncate(atOffset: end)) != nil, (try? handle.seek(toOffset: end)) != nil {
+                count += samples.count
+            }
+            throw error
+        }
         count += samples.count
         unsynced += samples.count
         if unsynced >= Self.syncInterval {

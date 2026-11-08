@@ -66,14 +66,16 @@ public actor MeetingSession {
         return MeetingSession(id: meeting.id, store: store, transcriber: transcriber, vad: vad, language: language, streams: files)
     }
 
-    /// Appends 16 kHz mono audio to a stream: to its file first, then to its segmenter. Throws when
-    /// the file cannot take it (disk full). Ignored once finish() has been called.
+    /// Appends 16 kHz mono audio to a stream: to its file, then to its segmenter even when the file
+    /// write threw (disk full), so the streams keep one timeline. Ignored once finish() has been called.
     public func feed(_ samples: [Float], stream: MeetingStream) throws {
         guard !released else { return }
         guard streams[stream] != nil else { preconditionFailure("\(stream) is not a stream of this meeting") }
+        defer {
+            streams[stream]!.segmenter.append(samples)
+            startPump()
+        }
         try streams[stream]!.writer?.append(samples)
-        streams[stream]!.segmenter.append(samples)
-        startPump()
     }
 
     /// Marks a gap at the current position (sleep, a lost device): audio is missing from here.

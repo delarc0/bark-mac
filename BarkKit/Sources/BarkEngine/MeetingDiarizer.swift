@@ -249,20 +249,26 @@ public final class MeetingDiarizer: Sendable {
     }
 }
 
-/// A stream's raw PCM, read in the windows the diarizer asks for.
-private struct PCMSource: AudioSampleSource {
-    let url: URL
+/// A stream's raw PCM, read in the windows the diarizer asks for. One handle held open for the pass:
+/// archiving deletes the PCM once its CAF checks out, and an unlinked file stays readable while open.
+private final class PCMSource: AudioSampleSource, @unchecked Sendable {
+    private let handle: FileHandle
     let sampleCount: Int
 
     init(url: URL) throws {
-        self.url = url
-        sampleCount = try PCM.sampleCount(url)
+        handle = try FileHandle(forReadingFrom: url)
+        sampleCount = Int(try handle.seekToEnd() / 2)
     }
 
+    deinit { try? handle.close() }
+
+    // pread, not seek plus read: segmentation and embedding read the source from two tasks at once.
     func copySamples(into destination: UnsafeMutablePointer<Float>, offset: Int, count: Int) throws {
         let start = max(0, offset)
         guard count > 0, start < sampleCount else { return }
-        let samples = try PCM.read(url, from: start, count: min(count, sampleCount - start))
-        destination.update(from: samples, count: samples.count)
+        var samples = [Int16](repeating: 0, count: min(count, sampleCount - start))
+        let bytes = samples.withUnsafeMutableBytes { pread(handle.fileDescriptor, $0.baseAddress, $0.count, off_t(start * 2)) }
+        guard bytes >= 0 else { throw StoreError("cannot read the PCM: errno \(errno)") }
+        for index in 0 ..< bytes / 2 { destination[index] = Float(Int16(littleEndian: samples[index])) / 32768 }
     }
 }
