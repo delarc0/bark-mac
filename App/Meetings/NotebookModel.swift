@@ -225,7 +225,7 @@ final class NotebookModel {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             try store.setTitle(id, trimmed.isEmpty ? nil : trimmed)
-            if meeting.status == .done {
+            if meeting.status.isFinished {
                 try store.enqueue(id)
                 hq?.sync()
             }
@@ -245,7 +245,7 @@ final class NotebookModel {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             try store.nameSpeaker(speaker.id, trimmed.isEmpty ? nil : trimmed)
-            if meeting.status == .done {
+            if meeting.status.isFinished {
                 try store.enqueue(meeting.id)
                 hq?.sync()
             }

@@ -26,7 +26,8 @@ enum Paste {
         let board = NSPasteboard.general
         let saved = prepared?.changeCount == board.changeCount ? prepared!.items : snapshot(board)
         prepared = nil
-        board.clearContents()
+        // This Mac only: Universal Clipboard would hand the dictation to the user's other devices.
+        board.prepareForNewContents(with: .currentHostOnly)
         board.writeObjects([concealedItem(text)])
         let ours = board.changeCount
         pressCommandV()
@@ -47,7 +48,7 @@ enum Paste {
     /// On the clipboard to stay: never restored, so the concealed marker is all that keeps it out of
     /// clipboard histories.
     static func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
+        NSPasteboard.general.prepareForNewContents(with: .currentHostOnly)
         NSPasteboard.general.writeObjects([concealedItem(text)])
     }
 
