@@ -15,7 +15,7 @@ let package = Package(
     dependencies: [
         // Silero v6 VAD for BarkEngine's segmenter, the offline diarizer (only its Diarizer trait); Parakeet in fluid-eval.
         .package(url: "https://github.com/FluidInference/FluidAudio", exact: "0.18.2", traits: ["Diarizer"]),
-        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.32.3"),
+        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.33.0"),
     ],
     targets: [
         .target(name: "BarkCore"),
