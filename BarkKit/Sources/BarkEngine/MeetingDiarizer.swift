@@ -226,7 +226,10 @@ public final class MeetingDiarizer: Sendable {
             pldaRhoModel: try model(names.pldaRhoPath, .all),
             pldaPsi: try Self.pldaPsi(models.appending(path: names.pldaParameters)),
             compilationDuration: 0)
-        let manager = OfflineDiarizerManager(config: .default)
+        var config = OfflineDiarizerConfig.default
+        // One speaker at a time, as before 0.18 flipped the default: SpeakerAttribution expects it.
+        config.exclusiveSegments = true
+        let manager = OfflineDiarizerManager(config: config)
         manager.initialize(models: loaded)
         return manager
     }

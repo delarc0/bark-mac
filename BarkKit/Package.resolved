@@ -1,22 +1,13 @@
 {
-  "originHash" : "4447b877a8dd9afaf10e39e83cfba330aefb305b1c0e9d21e090bcdb7dd14507",
+  "originHash" : "3f9a399d01fee9b1b581d03edd0535b1ab60dba5855685a69110d942e930a534",
   "pins" : [
-    {
-      "identity" : "argmax-oss-swift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/argmaxinc/argmax-oss-swift",
-      "state" : {
-        "revision" : "1e2a163736dfa5a198e637ae44c114e1c6d5cc2d",
-        "version" : "1.1.0"
-      }
-    },
     {
       "identity" : "fluidaudio",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/FluidInference/FluidAudio",
       "state" : {
-        "revision" : "503b4bd1bbf7220882de39fe8ae6716aae4132da",
-        "version" : "0.17.7"
+        "revision" : "e396cf780c4abf8e395087467c0585d3b0d17f68",
+        "version" : "0.18.2"
       }
     },
     {
@@ -24,17 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ml-explore/mlx-swift",
       "state" : {
-        "revision" : "19601207e9a0de51e03ee6ec0c3c5f3784275075",
-        "version" : "0.32.3"
-      }
-    },
-    {
-      "identity" : "swift-argument-parser",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-argument-parser.git",
-      "state" : {
-        "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
-        "version" : "1.8.2"
+        "revision" : "7ede4fd6d05f63305c1c0ebf4f8c1909a637c574",
+        "version" : "0.33.0"
       }
     },
     {

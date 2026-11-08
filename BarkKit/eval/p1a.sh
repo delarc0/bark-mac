@@ -1,5 +1,5 @@
 #!/bin/bash
-# P1a gate: run.sh's matrix plus dict/long and --language auto, every clip fed through
+# P1a gate: S0's matrix plus dict/long and --language auto, every clip fed through
 # DictationSession (mlx-eval --pipeline), per variant (fp16, q8 = 8-bit), scored against
 # baseline-mlx.json; then dict-sv/dict-en fed at real-time pace for release-to-final.
 # Results: <eval dir>/p1a/<variant>[-rt]/results, named by route so variants share baseline keys.

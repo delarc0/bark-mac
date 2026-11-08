@@ -5,7 +5,7 @@ import BarkStore
 import Foundation
 import MLX
 
-// bark-eval's contract on BarkEngine: transcribes every .wav in a directory and writes one JSON
+// The eval CLI on BarkEngine: transcribes every .wav in a directory and writes one JSON
 // line per clip. Engine-only by default (the S8 mode: one decode per clip, no gate, no clean-up).
 // --pipeline feeds each clip through a DictationSession exactly as the app will (Silero segments,
 // 28 s cut, routing, clean-up): as fast as possible, or with --realtime 1 in 100 ms blocks at
@@ -65,8 +65,8 @@ if let value = args["cache-limit-mb"] {
     }
 }
 
-// Where FluidAudio cached Silero for the spike tools; the app ships its own copy.
-let sileroFolder = URL.applicationSupportDirectory.appending(path: "FluidAudio/Models/silero-vad")
+// The Silero copy the app bundles.
+let sileroFolder = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../App/Resources/silero-vad")
 
 if args["meeting"] == "1" {
     guard let outPath = args["out"], let speed = Double(args["speed"] ?? "10"), let minutes = Double(args["minutes"] ?? "90"),

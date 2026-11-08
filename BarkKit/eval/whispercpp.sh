@@ -1,6 +1,6 @@
 #!/bin/bash
 # Reference run on whisper.cpp: whisper-cli over a clip dir, same JSONL as
-# bark-eval (decode_seconds includes the per-clip model load, so ignore it).
+# mlx-eval (decode_seconds includes the per-clip model load, so ignore it).
 # usage: whispercpp.sh <ggml model> <lang> <clips dir> <out.jsonl> [whisper-cli args...]
 set -euo pipefail
 model=$1 lang=$2 clips=$3 out=$4
