@@ -44,19 +44,21 @@ public actor GoogleCalendar {
         let moment = moment ?? now()
         let list = try await calendarList()
         let from = moment.addingTimeInterval(-Self.lookBehind), to = moment.addingTimeInterval(Self.lookAhead)
-        return try await withThrowingTaskGroup(of: [CalendarCandidate].self) { group in
-            for calendar in list {
+        return try await withThrowingTaskGroup(of: (Int, [CalendarCandidate]).self) { group in
+            for (index, calendar) in list.enumerated() {
                 group.addTask {
                     // One calendar Google refuses (403, 404) must not hide the others; a dead token still fails the lookup.
                     do {
-                        return try await self.events(of: calendar.id, from: from, to: to)
+                        return (index, try await self.events(of: calendar.id, from: from, to: to))
                     } catch CalendarError.server(let status) where status != 401 {
-                        return []
+                        return (index, [])
                     }
                 }
             }
-            var all: [CalendarCandidate] = []
-            for try await events in group { all += events }
+            var byCalendar: [(Int, [CalendarCandidate])] = []
+            for try await result in group { byCalendar.append(result) }
+            // Calendar-list order (primary first), so the same event on two calendars keeps the primary copy.
+            let all = byCalendar.sorted { $0.0 < $1.0 }.flatMap(\.1)
             var seen: Set<String> = []
             return all.filter { seen.insert($0.id).inserted }
         }
