@@ -17,6 +17,7 @@ enum Fixtures {
         FileManager.default.fileExists(atPath: vadFolder.appending(path: Transcriber.sileroModel).path)
     }
     static var modelsInstalled: Bool { generalID != nil && vadInstalled }
+    static var swedishID: String? { [ModelID.swedish8, ModelID.swedish].first(where: store.isInstalled) }
     static var clipsInstalled: Bool { modelsInstalled && FileManager.default.fileExists(atPath: evalSets.path) }
 
     /// One general-model transcriber for every test that needs one: the model is gigabytes.

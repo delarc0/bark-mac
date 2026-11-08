@@ -117,10 +117,12 @@ public actor Transcriber {
     let worker = Transcriber.sharedWorker
     let gate = Transcriber.sharedGate
     private let generalFolder: URL
-    private let swedishFolder: URL?
+    private var swedishFolder: URL?
     private let vadFolder: URL
     private var engines: [ModelRole: Engine] = [:]
     private var swedishLoad: Task<Void, Never>?
+    /// Bumped by every setSwedish, so a load it superseded is dropped when it lands.
+    private var swedishGeneration = 0
     private var vad: VadManager?
     /// The last confidently detected language, kept across dictations. Prefills, never routes.
     private(set) var remembered: String?
@@ -165,10 +167,27 @@ public actor Transcriber {
         return VadManager(config: config, vadModel: model)
     }
 
+    /// Turns the Swedish model on, off or to another folder in place: a meeting decoding on this
+    /// Transcriber keeps it, and the general model is never loaded twice.
+    public func setSwedish(_ folder: URL?) {
+        guard folder != swedishFolder else { return }
+        swedishFolder = folder
+        swedishGeneration += 1
+        engines[.swedish] = nil
+        swedishLoad = nil
+        // Before start() has loaded general, start() picks the folder up.
+        if let folder, engines[.general] != nil {
+            swedishLoad = Task { await loadSwedish(folder) }
+        }
+    }
+
     private func loadSwedish(_ folder: URL) async {
+        let generation = swedishGeneration
         do {
             let engine = try await worker.run(.background) { try Engine(folder: folder) }
             try await warmUp(engine, language: "sv", .background)
+            // Switched off or to another folder while this one loaded.
+            guard generation == swedishGeneration else { return }
             engines[.swedish] = engine
         } catch {
             log.error("Swedish model failed to load, Swedish runs on the general model: \(String(describing: error), privacy: .public)")

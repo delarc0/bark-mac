@@ -34,6 +34,24 @@ struct WorkerTests {
 }
 
 struct SessionTests {
+    @Test(.enabled(if: Fixtures.modelsInstalled && Fixtures.swedishID != nil))
+    func swedishSwitchesInPlace() async throws {
+        _ = try await Fixtures.transcriber.value // points MLX at the metallib
+        let transcriber = Transcriber(general: Fixtures.store.folder(Fixtures.generalID!), swedish: nil, vad: Fixtures.vadFolder)
+        try await transcriber.start()
+        #expect(await !transcriber.swedishReady())
+        let kb = Fixtures.store.folder(Fixtures.swedishID!)
+        await transcriber.setSwedish(kb)
+        await transcriber.setSwedish(nil)
+        await transcriber.setSwedish(kb) // the first load is superseded and dropped
+        #expect(await transcriber.swedishReady())
+        #expect(await transcriber.available(.swedish) == .swedish)
+        #expect(await transcriber.modelID(.swedish) == Fixtures.swedishID)
+        await transcriber.setSwedish(nil)
+        #expect(await !transcriber.swedishReady())
+        #expect(await transcriber.available(.swedish) == .general)
+    }
+
     @Test func sessionBeforeStartThrows() async {
         let transcriber = Transcriber(general: URL(filePath: "/nonexistent"), swedish: nil, vad: URL(filePath: "/nonexistent"))
         await #expect(throws: TranscriberError.self) { try await transcriber.makeSession(language: .auto) }

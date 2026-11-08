@@ -71,7 +71,12 @@ final class Models {
         }
         let swedish = settings.swedishModelEnabled && store.isInstalled(Self.swedish) ? store.folder(Self.swedish) : nil
         let folders = [store.folder(Self.general), swedish]
-        if folders == loaded, state == .loading || state == .ready { return }
+        if let transcriber, loaded.first == folders.first, state == .loading || state == .ready {
+            // Only Swedish changed: switched in place, so a running meeting never holds a second general model.
+            if loaded != folders { Task { await transcriber.setSwedish(swedish) } }
+            loaded = folders
+            return
+        }
         loaded = folders
         // A dictation in flight keeps the transcriber it started on; this one serves the next.
         let transcriber = Transcriber(general: store.folder(Self.general), swedish: swedish, vad: Self.silero)
