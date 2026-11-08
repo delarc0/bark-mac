@@ -189,7 +189,7 @@ final class Dictation {
             if !lossy { onNothingHeard?() }
         } else {
             History.shared.add(result.text)
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == target {
+            if let target, NSWorkspace.shared.frontmostApplication?.processIdentifier == target {
                 Paste.paste(result.text)
             } else {
                 Paste.copy(result.text)
