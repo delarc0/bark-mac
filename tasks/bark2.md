@@ -1514,3 +1514,55 @@ what this set measures well. Sets are read speech, not dictation; the term
 extractor also picks up junk terms ("I", bare numbers), which is realistic for
 an hq-fed list. `own+150` ran at 92 terms because the fleurs-sv pool holds
 only 92.
+
+## Dependency pass (2026-11-08)
+
+Branch `deps`. Mac Studio M5 Max, eval data rebuilt, so every number here is
+before/after on this machine and does not compare to the M5 Pro tables above.
+`p1a.sh q8` before and after each step; timings ran on AC with no other
+worktree building (the baseline run overlapped sibling builds for a minute).
+
+- **Sparkle 2.10.1**, **WhisperKit spike tools deleted** (bark-eval,
+  stream-eval, argmax-oss-swift). `mlx-eval` now loads Silero from
+  `App/Resources/silero-vad`; nothing fills FluidAudio's cache any more.
+- **FluidAudio 0.18.2**, `Diarizer` trait only (no Nemo/TTS code linked).
+  0.18 flipped `exclusiveSegments` to false; `MeetingDiarizer` pins it true.
+  AMI (6 meetings, collar 0.25, overlap scored): RTTMs identical to 0.17.7,
+  DER 19.8% mix-headset / 21.5% array1, right speaker 69.9 / 69.6 (oracle
+  71.3), speaker count 6/6. Non-exclusive: DER 15.5 / 17.9 but right speaker
+  70.0 / 69.7; the DER gain is overlap credit SpeakerAttribution cannot use,
+  so it stays off. p1a WER unchanged.
+- **mlx-swift 0.33.0** (core 0.32.4): no source change; weight format
+  unchanged, so `quantize.py` stays on mlx 0.32.3. Transcripts identical
+  except one deterministic change on a 0.8 s clip (short08-sv 1691) and the
+  known run-to-run flips (long-sv 1680, short08-en 1675, dict-sv 1660).
+
+| q8 | base | FluidAudio 0.18.2 | mlx-swift 0.33.0 |
+|----|------|-------------------|------------------|
+| fleurs-sv/swedish WER | 5.81% | 5.81% | 5.81% |
+| fleurs-sv/general WER | 8.99% | 8.99% | 8.99% |
+| fleurs-en/general WER | 4.71% | 4.71% | 4.71% |
+| dict-sv / dict-en WER | 5.89 / 4.71% | 5.89 / 4.71% | 5.81 / 4.71% |
+| dict-sv r2f p50 / p95, real time | 0.36 / 0.75 s (not quiet) | 0.32 / 0.43 s | 0.31 / 0.41 s |
+| dict-en r2f p50 / p95, real time | 0.40 / 0.66 s (not quiet) | 0.26 / 0.34 s | 0.26 / 0.38 s |
+
+**whisper.cpp release wait (measurement only).** whisper.cpp 1.9.5
+(Homebrew) `whisper-server`, KBLab GGML (fp16), `-l sv`, warm, one POST per
+dict-sv clip; the wait is the POST's wall time, a one-shot decode of the
+whole clip after release.
+
+| dict-sv | WER | release wait p50 / p95 |
+|---------|-----|------------------------|
+| whisper.cpp KB, greedy (`-bs 1`) | 6.43% | 0.47 / 0.62 s |
+| whisper.cpp KB, beam 5 | 6.36% | 0.56 / 0.76 s |
+| MLX KB 8-bit, whole clip at once through DictationSession | 5.81% | 0.36 / 0.48 s |
+| MLX KB 8-bit, fed in real time (Bark's actual wait) | 5.81% | 0.31 / 0.41 s |
+
+whisper.cpp is no longer 3x behind as on WhisperKit, but MLX is still faster
+and more accurate, and Bark's segmenting means the real wait is only the last
+segment.
+
+**Qwen3-ASR 1.7B on Swedish (measurement only).** `mlx-community/Qwen3-ASR-1.7B-bf16`
+via mlx-audio 0.6.4, language forced to Swedish, scored with `score.py`'s
+normalizer: **fleurs-sv WER 19.92%** against KB's 5.81%. Not a candidate for
+Swedish.
