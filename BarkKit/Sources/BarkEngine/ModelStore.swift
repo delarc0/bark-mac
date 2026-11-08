@@ -50,7 +50,7 @@ extension ModelManifest {
         ]),
         manifest(ModelID.swedish8, [
             ("config.json", 342, "5b01488ca81d15986a4298672891f71d7fe7b850fba001380c0050bb55b0e01f"),
-            ("weights.safetensors", 1_644_895_305, "828524977f6fdb2be4ec1e233d5e01901d8c241e5874b4e60e66ae56a6b87fe2"),
+            ("weights.safetensors", 1_644_895_663, "5010c3ad9ba735567004081d1f852d1bd5b6884f21c3cc702c096a16d58f2b2f"),
             ("tokenizer.json", 3_931_383, "d06d0c877b5143ccdcb761407d5650b18a6afc33f9261fcb7e0dd44acbc1c262"),
         ]),
         manifest(ModelID.general, [
