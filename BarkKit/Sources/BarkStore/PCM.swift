@@ -82,8 +82,10 @@ public final class PCMWriter {
     public static let syncInterval = 2 * PCM.sampleRate
     private let handle: FileHandle
     private var unsynced = 0
-    /// Samples in the file.
+    /// Samples appended, the ones a failed write lost included.
     public private(set) var count: Int
+    /// A write failed (disk full): the file may end short or mid-sample until it is realigned.
+    private var misaligned = false
 
     public init(url: URL) throws {
         if !FileManager.default.fileExists(atPath: url.path) {
@@ -108,14 +110,12 @@ public final class PCMWriter {
             }
         }
         do {
+            try realign()
             try handle.write(contentsOf: data)
         } catch {
-            // Disk full: the file still takes the block as silence (a sparse extension needs no free
-            // space), so the timeline after it stays where the segmenter has it.
-            let end = UInt64((count + samples.count) * 2)
-            if (try? handle.truncate(atOffset: end)) != nil, (try? handle.seek(toOffset: end)) != nil {
-                count += samples.count
-            }
+            count += samples.count
+            misaligned = true
+            try? realign()
             throw error
         }
         count += samples.count
@@ -126,7 +126,17 @@ public final class PCMWriter {
         }
     }
 
+    /// Lost samples become silence (a sparse extension needs no free space), so the file keeps the
+    /// timeline the segmenter has and later appends stay sample-aligned. Retried until it succeeds.
+    private func realign() throws {
+        guard misaligned else { return }
+        try handle.truncate(atOffset: UInt64(count * 2))
+        try handle.seek(toOffset: UInt64(count * 2))
+        misaligned = false
+    }
+
     public func close() throws {
+        try? realign()
         try handle.synchronize()
         try handle.close()
     }

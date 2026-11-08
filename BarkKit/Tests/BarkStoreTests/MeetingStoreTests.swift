@@ -295,6 +295,35 @@ struct MeetingStoreTests {
         #expect(try PCM.read(url, from: 39_990, count: 100).count == 10)
     }
 
+    @Test func aFailedWriteKeepsTheTimelineAndLaterAppendsAligned() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "them.pcm")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let writer = try PCMWriter(url: url)
+        // 8 MB first, so the file size limit below sits above every other file the tests write.
+        try writer.append([Float](repeating: 0.25, count: 4_000_000))
+        let tone = (0 ..< 1_000).map { Float(sin(Double($0) * 0.05) * 0.5) }
+
+        // A file size limit ending mid-sample stands in for a full disk: a partial write, then
+        // a realign that fails too.
+        let oldHandler = signal(SIGXFSZ, SIG_IGN)
+        var limit = rlimit()
+        getrlimit(RLIMIT_FSIZE, &limit)
+        var tight = limit
+        tight.rlim_cur = rlim_t(8_000_000 + 1_001)
+        setrlimit(RLIMIT_FSIZE, &tight)
+        #expect(throws: (any Error).self) { try writer.append(tone) }
+        setrlimit(RLIMIT_FSIZE, &limit)
+        signal(SIGXFSZ, oldHandler)
+
+        try writer.append(tone)
+        try writer.close()
+        #expect(writer.count == 4_002_000)
+        #expect(try PCM.sampleCount(url) == 4_002_000)
+        let last = try PCM.read(url, from: 4_001_000, count: 1_000)
+        #expect(zip(last, tone).allSatisfy { abs($0 - $1) <= 1.0 / 32768 })
+    }
+
     @Test func archiveIsLosslessAndDeletesThePCM() throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try MeetingStore(root: root)
